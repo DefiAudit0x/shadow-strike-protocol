@@ -1,0 +1,29 @@
+vulnerability_class: upgradeability
+display_name: "Upgradeability Hazards (storage collision, unprotected upgrade, selfdestruct)"
+description: >
+  Proxy-pattern specific risks: a new implementation whose storage
+  layout doesn't match the proxy's existing slots (storage collision,
+  silently corrupting state on upgrade), an upgradeTo()/upgradeToAndCall()
+  with no access control, or a selfdestruct reachable in the
+  implementation contract (which can brick every proxy pointing at it,
+  pre-Cancun; post-Cancun selfdestruct no longer deletes code but can
+  still drain the implementation's own balance).
+
+default_invariants:
+  - "proxy.implementation_after_upgrade == proxy.authorized_implementation"
+
+default_success_conditions:
+  - expression: "attacker.controls_implementation_slot == true"
+    description: "Attacker set the proxy's implementation to an address of their choosing"
+
+heuristic_source_patterns:
+  - pattern: 'function upgradeTo('
+    note: "verify access control AND that it's not also exposed on the implementation contract itself (not just the proxy)"
+  - pattern: 'delegatecall'
+    note: "any delegatecall into attacker-influenced code is a storage-collision risk, not just explicit upgrade functions"
+
+attacker_template: null
+# roadmap — exploiting a storage collision requires knowing the SPECIFIC
+# storage layout mismatch between proxy and malicious implementation,
+# which can't be genericized into one template the way a call-ordering
+# bug can. A scenario here is realistically hand-authored per target.

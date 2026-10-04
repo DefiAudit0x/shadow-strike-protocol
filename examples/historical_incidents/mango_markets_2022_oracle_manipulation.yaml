@@ -1,0 +1,42 @@
+# Simplified reconstruction — see README.md's honesty note.
+vulnerability_class: oracle_manipulation
+target_protocol: "Mango Markets (Oct 2022, simplified reconstruction)"
+hypothesis: >
+  The protocol valued a trader's perpetual futures position using the
+  spot price of a thinly-traded market (MNGO), with no TWAP or
+  manipulation resistance. The attacker used linked accounts to push
+  that spot price up sharply via low-liquidity trades, which inflated
+  the paper value of their own existing position, then borrowed
+  against that inflated collateral valuation from the protocol
+  treasury in the same general window — a single-block-style price
+  manipulation rather than a protocol code bug per se.
+
+attacker:
+  initial_eth: 50.0
+
+initial_state:
+  fork_url: "https://solana-mainnet.example/rpc"   # real target was Solana, not EVM — see assumptions
+  fork_block: 0
+  target_contracts:
+    pool: "mock-mngo-perp-pool"
+    market: "mock-mango-treasury"
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: attacker
+    function: "attack()"
+    value_eth: 45.0
+    comment: "pump the thin MNGO market, then borrow against the inflated collateral valuation"
+
+success_conditions:
+  - expression: "attacker.eth_balance_after - attacker.eth_balance_before > 0"
+    description: "attacker extracted treasury value purely from a manipulated price read"
+
+invariants_under_test:
+  - "pool.eth_balance_after >= 0"
+
+assumptions:
+  - "the REAL Mango Markets incident was on Solana, not EVM — this YAML models the mechanism via Shadow Strike's generic SimplePool/OracleFedLendingMarket mocks, which are deliberately chain-agnostic toy models, NOT a Solana-accurate replay"
+  - "loss commonly reported as ~$116M; not independently re-verified in this session"
+  - "a rigorous version of this scenario would need a Solana-specific executor, which Shadow Strike does not have (EVM/Foundry only) — flagged honestly rather than silently treated as EVM-equivalent"

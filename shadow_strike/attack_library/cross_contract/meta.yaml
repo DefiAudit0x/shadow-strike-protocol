@@ -1,0 +1,27 @@
+vulnerability_class: cross_contract
+display_name: "Cross-Contract / Composability Hazards"
+description: >
+  The vulnerability doesn't live in any single contract in isolation —
+  it emerges from how two or more contracts interact (e.g. contract A
+  trusts a callback from contract B that B's own logic lets an attacker
+  redirect; a shared library used inconsistently by two contracts that
+  disagree about an invariant each assumes the other enforces).
+
+default_invariants: []
+# genuinely scenario-specific — a cross-contract invariant is, by
+# definition, a statement about the RELATIONSHIP between two particular
+# contracts, not something generic enough to default here.
+
+default_success_conditions:
+  - expression: "attacker.exploited_trust_boundary == true"
+    description: "Attacker used contract B's permissiveness to violate an assumption contract A relied on"
+
+heuristic_source_patterns:
+  - pattern: 'IExternal'
+    note: "generic interface naming is a weak signal only — flag any external call whose target is itself attacker-upgradable or attacker-deployable"
+
+attacker_template: null
+# roadmap — this class is defined by the RELATIONSHIP between specific
+# contracts in a specific deployment; see architecture doc §8, "attacks
+# that need bespoke per-protocol logic." Composes with whatever
+# single-contract class actually triggers the exploit once scoped.

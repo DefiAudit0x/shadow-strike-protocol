@@ -1,0 +1,11 @@
+# ---- core engine (actually required — scenario engine, compiler, storage) ----
+jinja2>=3.1
+pyyaml>=6.0
+
+# ---- production upgrades (optional — core runs without these) ----
+# pydantic>=2.0            # drop-in schema layer w/ JSON-schema export
+# langgraph>=0.2            # production agent orchestrator (graph_langgraph.py)
+# fastapi>=0.110             # orchestration API (shadow_strike/api/main.py)
+# uvicorn>=0.29
+# sqlalchemy>=2.0            # Postgres-backed Knowledge Store at scale
+# psycopg2-binary>=2.9

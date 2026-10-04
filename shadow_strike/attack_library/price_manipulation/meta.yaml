@@ -1,0 +1,26 @@
+vulnerability_class: price_manipulation
+display_name: "Price / Share Manipulation (donation attacks, inflation attacks)"
+description: >
+  Distinct from oracle_manipulation: here the protocol computes its OWN
+  internal price (e.g. ERC-4626 share price = totalAssets/totalShares)
+  from balances that can be directly donated to, rather than reading an
+  external oracle. First-depositor / vault-inflation attacks are the
+  classic instance: attacker deposits 1 wei for 1 share, then donates a
+  huge amount directly to the vault's token balance, inflating
+  totalAssets without minting shares, so the NEXT depositor's shares
+  round down to zero.
+
+default_invariants:
+  - "vault.shares_minted_for(deposit_amount) > 0"
+
+default_success_conditions:
+  - expression: "victim.shares_received_after_deposit == 0"
+    description: "A legitimate depositor received zero shares for a nonzero deposit (classic inflation-attack signature)"
+
+heuristic_source_patterns:
+  - pattern: 'totalAssets()'
+    note: "share-price style accounting — check whether it's donation-resistant (virtual shares/offset, or balance snapshotting)"
+  - pattern: 'convertToShares'
+    note: "ERC-4626-style conversion — verify first-depositor / inflation-attack mitigations exist"
+
+attacker_template: attacker_template.sol.j2

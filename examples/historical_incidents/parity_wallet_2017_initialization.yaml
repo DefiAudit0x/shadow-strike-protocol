@@ -1,0 +1,40 @@
+# Simplified reconstruction — see README.md's honesty note.
+vulnerability_class: initialization
+target_protocol: "Parity Multisig WalletLibrary (Nov 2017, simplified reconstruction)"
+hypothesis: >
+  The shared WalletLibrary contract that every Parity multisig wallet
+  delegatecall'd into had an initWallet()-equivalent with no guard
+  against being called more than once, by anyone. An attacker called
+  it directly on the library contract itself (not through a proxy),
+  became its "owner", then — in the real incident — triggered
+  selfdestruct on the library, bricking every wallet that delegated to
+  it. This scenario models the ownership takeover step; it does not
+  model the subsequent selfdestruct, which isn't representable by the
+  current attack_library/initialization template (selfdestruct's
+  cross-wallet blast radius is closer to the cross_contract roadmap
+  class than to initialization alone).
+
+attacker:
+  initial_eth: 0.0
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"
+  fork_block: 4501637   # approximate block range of the real Nov 2017 incident
+  target_contracts:
+    vault: "0x863df6bfa4469f3ead0be8f9f2aae51c91a907b"   # real WalletLibrary address, for reference only
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: vault
+    function: "initialize()"
+    comment: "call the unguarded initializer directly on the library contract"
+
+success_conditions:
+  - expression: "vault.owner == 'attacker'"
+    description: "attacker became the privileged owner of a contract they were never meant to control"
+
+assumptions:
+  - "mock engine only — the real incident targeted the shared library contract directly, bypassing every proxy that delegated to it"
+  - "loss commonly reported as ~513,774 ETH FROZEN (not stolen) across ~1600 wallets; not independently re-verified in this session"
+  - "this scenario stops at ownership takeover; the historical selfdestruct step is out of scope for the current template"

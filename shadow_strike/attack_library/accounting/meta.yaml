@@ -1,0 +1,29 @@
+vulnerability_class: accounting
+display_name: "Accounting Error (rounding, unchecked arithmetic, double-counting)"
+description: >
+  Internal bookkeeping drifts from reality: rounding consistently in the
+  protocol's favor or the user's, a fee applied to the wrong base,
+  balances double-credited across two code paths that should be
+  mutually exclusive, or (pre-0.8.0 / unchecked blocks) silent
+  overflow/underflow.
+
+default_invariants:
+  - "protocol.sum_of_internal_balances == protocol.actual_token_balance"
+
+default_success_conditions:
+  - expression: "attacker.extracted_value > attacker.deposited_value"
+    description: "Attacker extracted more value than they deposited due to an accounting drift, not a price move"
+
+heuristic_source_patterns:
+  - pattern: 'unchecked {'
+    note: "unchecked arithmetic block — verify the invariant it's protecting still holds at every call site"
+  - pattern: '/ totalSupply'
+    note: "division by a mutable total — check rounding direction and order of operations"
+
+attacker_template: null
+# roadmap — accounting bugs are inherently protocol-specific (the exact
+# arithmetic path differs every time); a generic attacker contract
+# can't target "an accounting error" the way it can target a known
+# call-ordering pattern. Best served by a scenario the researcher
+# writes by hand against the specific formula, validated through the
+# same AttackScenario/Verifier pipeline as everything else.

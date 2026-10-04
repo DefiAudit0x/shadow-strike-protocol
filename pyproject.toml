@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shadow-strike-protocol"
+version = "0.1.0"
+description = "Interactive smart contract attack simulation lab — turns a vulnerability hypothesis into an executed, state-verified proof."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "UNLICENSED" }
+authors = [{ name = "Salah Meguireche (DefiAudit0x)" }]
+keywords = ["smart-contracts", "security", "solidity", "foundry", "evm", "defi", "audit"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+production = [
+    "pydantic>=2.0",
+    "langgraph>=0.2",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+shadow-strike = "shadow_strike.cli:main"
+
+[project.urls]
+Repository = "https://github.com/DefiAudit0x/shadow-strike-protocol"
+
+[tool.setuptools.packages.find]
+include = ["shadow_strike*"]
+
+[tool.setuptools.package-data]
+shadow_strike = [
+    "attack_library/*/meta.yaml",
+    "attack_library/*/*.sol.j2",
+    "execution/templates/*.j2",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,41 @@
+# Worked example for the `accounting` class, which — per
+# attack_library/accounting/meta.yaml — deliberately has NO automated
+# scenario_planner builder (accounting bugs are too protocol-specific
+# to genericize). This is the hand-authoring path in practice: one
+# concrete bug, written by hand, run through the exact same
+# validation/execution/verification pipeline as every automated scenario.
+vulnerability_class: accounting
+target_protocol: "UncheckedBalanceToken (hand-authored demo)"
+hypothesis: >
+  transfer() subtracts `amount` from the caller's balance with no check
+  that the balance can cover it. In real pre-0.8 Solidity (or an
+  explicit `unchecked {}` block in 0.8+), this underflows: balance - amount
+  for amount > balance wraps around to a value near 2^256 instead of
+  reverting. An attacker holding zero tokens can "transfer" more than
+  they have to themselves and walk away holding effectively the entire
+  possible token supply.
+
+attacker:
+  initial_eth: 0.0
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"
+  fork_block: 19000000
+  target_contracts:
+    token: "0x5555555555555555555555555555555555555555"
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: token
+    function: "transfer(address,uint256)"
+    args: ["attacker", 1000]
+    comment: "attacker holds 0 tokens — this transfer should be impossible, not wrap around"
+
+success_conditions:
+  - expression: "token.attacker_balance > 1000000000000000000000000000000000000000"
+    description: "attacker's balance underflowed to an astronomically large value from a single unchecked transfer of tokens they never held"
+
+assumptions:
+  - "mock engine simulates uint256 wraparound explicitly (Python has no native fixed-width integer semantics)"
+  - "real fork replay would target an actual token contract's transfer() — this models the mechanism generically, not a specific historical incident"

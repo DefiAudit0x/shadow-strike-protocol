@@ -1,0 +1,24 @@
+vulnerability_class: signature_replay
+display_name: "Signature Replay / Malleability"
+description: >
+  An off-chain signature (EIP-712 or raw ECDSA) authorizing an action is
+  accepted more than once (no nonce / used-signature tracking), on
+  another chain (no chainId in the signed payload), against another
+  contract (no verifyingContract / domain separator), or in a
+  malleable form (s not canonicalized, allowing a second valid
+  signature for the same (r,s) pair's flipped counterpart).
+
+default_invariants:
+  - "signatures.used_count(sig_hash) <= 1"
+
+default_success_conditions:
+  - expression: "attacker.replayed_action_count > 1"
+    description: "The same signed authorization was successfully consumed more than once"
+
+heuristic_source_patterns:
+  - pattern: 'ecrecover'
+    note: "raw ecrecover — check for nonce tracking AND signature malleability (use OpenZeppelin ECDSA.recover instead)"
+  - pattern: 'permit('
+    note: "EIP-2612-style permit — check domain separator includes chainId and verifyingContract"
+
+attacker_template: attacker_template.sol.j2

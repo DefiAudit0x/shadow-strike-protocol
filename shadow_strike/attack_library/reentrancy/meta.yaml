@@ -1,0 +1,33 @@
+vulnerability_class: reentrancy
+display_name: "Reentrancy (external call before state update)"
+description: >
+  The target function performs an external call (raw ETH transfer, or a
+  call into a token/receiver contract) *before* it finalizes its own
+  accounting state. A malicious callee re-enters the vulnerable function
+  during that external call, while the contract's internal state still
+  reflects the pre-withdrawal balance.
+
+# NOTE: keep these expressed over whatever variable names the chosen
+# executor (ForgeRunner / MockExecutor) actually emits — both currently
+# expose <alias>.eth_balance_before / <alias>.eth_balance_after. An
+# invariant referencing a name neither executor emits is reported as
+# "unevaluable" by the Verifier rather than silently skipped or passed.
+default_invariants:
+  - "vault.eth_balance_after >= 0"
+
+default_success_conditions:
+  - expression: "attacker.eth_balance_after - attacker.eth_balance_before > attacker.legitimate_entitlement"
+    description: "Attacker extracted strictly more ETH than their legitimate entitlement"
+
+heuristic_source_patterns:
+  # used by the zero-dependency rule-based hypothesis generator (agent/nodes.py)
+  # as a *hint*, never as a verdict on its own — a hit here only produces a
+  # hypothesis to be executed and verified, exactly per architecture principle #2.
+  - pattern: 'call{value:'
+    note: "low-level call carrying value — check what state is written after this line"
+  - pattern: '.transfer('
+    note: "legacy transfer() — gas-capped but still worth checking call ordering"
+  - pattern: '.send('
+    note: "legacy send() — same class of check as transfer()"
+
+attacker_template: attacker_template.sol.j2

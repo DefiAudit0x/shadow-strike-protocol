@@ -1,0 +1,45 @@
+# Demonstrates flash_loan's documented design: it COMPOSES with another
+# class (reentrancy here) rather than having its own standalone
+# scenario_planner builder — see attack_library/flash_loan/meta.yaml's
+# `composes_with`. This is the hand-authored path in action for a
+# composed attack: the attacker needs ZERO starting capital, borrowing
+# the entire stake atomically via a flash loan before the reentrant
+# drain, and repaying principal + fee out of the proceeds.
+vulnerability_class: flash_loan
+target_protocol: "FlashLoanAmplifiedVault (composed demo)"
+hypothesis: >
+  A reentrant vault doesn't require the attacker to risk any of their
+  own capital — the deposit stake itself can be borrowed atomically via
+  a flash loan, used to set up the reentrant withdraw, and repaid (with
+  fee) out of the drained proceeds, all within one logical transaction.
+  This is why flash loans amplify the IMPACT of a reentrancy bug even
+  when the attacker starts from zero.
+
+attacker:
+  initial_eth: 0.0   # the whole point — no capital required
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"
+  fork_block: 19000000
+  target_contracts:
+    vault: "0x3333333333333333333333333333333333333333"
+    lender: "0x4444444444444444444444444444444444444444"
+  balances:
+    vault: 20.0     # other depositors' pooled liquidity — what gets drained
+    lender: 100.0   # the flash-loan pool's available liquidity
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: attacker
+    function: "attack()"
+    args: [5.0]
+    comment: "borrow 5 ETH via flash loan — zero collateral of the attacker's own"
+
+success_conditions:
+  - expression: "attacker.eth_balance_after - attacker.eth_balance_before > 0"
+    description: "attacker profited with ZERO starting capital, after repaying the flash loan plus fee"
+
+assumptions:
+  - "mock engine models an ERC-3156-style flash loan provider with a configurable fee (fee_bps)"
+  - "real fork replay would target an actual flash-loan provider's entry point (Aave, Balancer, Uniswap V3 flash swap) instead of a freshly-deployed lender"

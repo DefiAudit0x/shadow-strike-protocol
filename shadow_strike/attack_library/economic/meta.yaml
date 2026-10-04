@@ -1,0 +1,33 @@
+vulnerability_class: economic
+display_name: "Economic / Game-Theoretic Attacks"
+description: >
+  No code-level bug at all — the protocol does exactly what it was
+  coded to do, but the incentive design itself is exploitable: a
+  liquidation mechanism an attacker can trigger against themselves
+  profitably, a governance token cheap enough to buy a controlling
+  vote and pass a malicious proposal in one block (often flash-loan
+  amplified), or a reward formula that pays more to manipulate than to
+  participate honestly.
+
+default_invariants: []
+# economic invariants are protocol-specific statements about incentive
+# alignment, not a structural property of the code — no sane generic
+# default exists.
+
+default_success_conditions:
+  - expression: "attacker.profit_from_rational_actor_exploit > attacker.cost_of_attack"
+    description: "The 'exploit' is simply the most profitable rational action available — the mechanism design itself is the bug"
+
+heuristic_source_patterns:
+  - pattern: 'governance'
+    note: "weak signal — check token concentration, timelock length, and flash-loan voting-power resistance (snapshot-based voting mitigates this)"
+  - pattern: 'liquidate'
+    note: "check liquidation incentive sizing against realistic attacker-triggered scenarios, not just organic ones"
+
+attacker_template: null
+# roadmap — by definition these require a full economic/game-theoretic
+# model of the specific protocol's incentives, not a reusable Solidity
+# attacker contract. This is the class the architecture doc's §8 risk
+# section flags as hardest to genericize; likely needs a different kind
+# of "executor" entirely (an agent-based simulation, not a single
+# Foundry transaction sequence) — candidate for its own sub-project.

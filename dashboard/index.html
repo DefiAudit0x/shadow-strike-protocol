@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<!--
+  Shadow Strike Protocol — minimal dashboard
+
+  Talks to shadow_strike/api/main.py (FastAPI). Not bundled, not built —
+  open this file directly in a browser while `uvicorn shadow_strike.api.main:app`
+  is running locally. No network dependency beyond the local API; no
+  external CDN, no build step.
+
+  NOT exercised live in this sandbox: api/main.py needs `fastapi`+`uvicorn`
+  installed and running, which this environment can't do (see README's
+  "ما اكتمل" honesty section). Syntax/logic reviewed, not run end-to-end.
+-->
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow Strike Protocol — Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #121820; --border: #22303c; --text: #d7e2ea;
+    --muted: #7d94a3; --accent: #ff4d4d; --ok: #3ddc84; --warn: #ffb020;
+    font-family: -apple-system, "Segoe UI", Tahoma, sans-serif;
+  }
+  body { background: var(--bg); color: var(--text); margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .panel h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input, select, textarea {
+    width: 100%; box-sizing: border-box; background: #0e141b; border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px; padding: 8px; font-size: 13px; font-family: inherit;
+  }
+  textarea { font-family: ui-monospace, monospace; min-height: 90px; }
+  button {
+    margin-top: 14px; width: 100%; background: var(--accent); color: #fff; border: 0;
+    border-radius: 6px; padding: 10px; font-size: 14px; cursor: pointer; font-weight: 600;
+  }
+  button:hover { opacity: .9; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  pre { background: #0e141b; border: 1px solid var(--border); border-radius: 6px; padding: 12px;
+        font-size: 12px; overflow-x: auto; max-height: 420px; white-space: pre-wrap; word-break: break-word; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge-ok { background: rgba(61,220,132,.15); color: var(--ok); }
+  .badge-fail { background: rgba(255,77,77,.15); color: var(--accent); }
+  .steps { list-style: none; padding: 0; margin: 0; font-size: 12px; color: var(--muted); }
+  .steps li { padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .steps li.active { color: var(--warn); font-weight: 700; }
+  .footer-note { margin-top: 24px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>🛡 Shadow Strike Protocol</h1>
+<div class="sub">مختبر محاكاة هجمات تفاعلي — يتصل بـ <code>api/main.py</code> محلياً على <code>http://localhost:8000</code></div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>تشغيل سيناريو جديد</h2>
+    <label>Protocol name</label>
+    <input id="protocolName" value="DemoVault">
+
+    <label>Target contracts (alias=address, سطر لكل واحد)</label>
+    <textarea id="targetContracts">vault=0x1111111111111111111111111111111111111111</textarea>
+
+    <label>Source code (Solidity)</label>
+    <textarea id="sourceCode">contract Vault {
+    function withdraw() external {
+        (bool ok,) = msg.sender.call{value: 1 ether}("");
+    }
+}</textarea>
+
+    <label>Engine</label>
+    <select id="engine">
+      <option value="mock">mock (offline, instant)</option>
+      <option value="foundry">foundry (real EVM, needs RPC)</option>
+    </select>
+
+    <label>Attacker initial ETH</label>
+    <input id="attackerEth" type="number" value="1.0" step="0.1">
+
+    <button id="runBtn">تشغيل الـ pipeline</button>
+
+    <ul class="steps" id="stepsList"></ul>
+  </div>
+
+  <div class="panel">
+    <h2>النتيجة</h2>
+    <div id="statusBadge"></div>
+    <pre id="output">لا توجد نتيجة بعد — شغّل سيناريو من اليسار.</pre>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:16px;">
+  <h2>مكتبة الهجمات</h2>
+  <div id="libraryList" class="sub">جارِ التحميل...</div>
+</div>
+
+<div class="footer-note">
+  يتطلب تشغيل: <code>pip install -e ".[production]" &amp;&amp; uvicorn shadow_strike.api.main:app --reload</code>
+</div>
+
+<script>
+const API_BASE = "http://localhost:8000";
+const STEP_LABELS = ["recon", "hypothesis", "scenario_planner", "executor", "verifier", "critic"];
+
+async function loadLibrary() {
+  const el = document.getElementById("libraryList");
+  try {
+    const res = await fetch(`${API_BASE}/attack-library`);
+    const entries = await res.json();
+    el.innerHTML = entries.map(e =>
+      `<span class="badge ${e.attacker_template ? 'badge-ok' : 'badge-fail'}" style="margin:0 6px 6px 0;">
+         ${e.display_name || e.vulnerability_class}
+       </span>`
+    ).join("");
+  } catch (err) {
+    el.textContent = "تعذّر الاتصال بالـ API — تأكد أن uvicorn يعمل على localhost:8000";
+  }
+}
+
+function parseTargets(text) {
+  const out = {};
+  text.split("\n").map(l => l.trim()).filter(Boolean).forEach(line => {
+    const [alias, addr] = line.split("=");
+    if (alias && addr) out[alias.trim()] = addr.trim();
+  });
+  return out;
+}
+
+async function runScenario() {
+  const btn = document.getElementById("runBtn");
+  const output = document.getElementById("output");
+  const badge = document.getElementById("statusBadge");
+  btn.disabled = true;
+  badge.innerHTML = "";
+  output.textContent = "جارِ التشغيل...";
+
+  const body = {
+    source_code: document.getElementById("sourceCode").value,
+    protocol_name: document.getElementById("protocolName").value,
+    target_contracts: parseTargets(document.getElementById("targetContracts").value),
+    engine: document.getElementById("engine").value,
+    attacker_initial_eth: parseFloat(document.getElementById("attackerEth").value),
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    badge.innerHTML = data.verified
+      ? `<span class="badge badge-ok">ATTACK VERIFIED ✔</span>`
+      : `<span class="badge badge-fail">NOT VERIFIED — ${data.stopped_reason}</span>`;
+    output.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    badge.innerHTML = `<span class="badge badge-fail">ERROR</span>`;
+    output.textContent = `تعذّر الاتصال بالـ API: ${err}\n\nتأكد أن الخادم يعمل:\nuvicorn shadow_strike.api.main:app --reload`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("runBtn").addEventListener("click", runScenario);
+loadLibrary();
+</script>
+
+</body>
+</html>

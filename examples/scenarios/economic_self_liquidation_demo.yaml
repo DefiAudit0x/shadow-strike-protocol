@@ -1,0 +1,43 @@
+# Worked example for `economic` — no automated builder by design
+# (attack_library/economic/meta.yaml: these are protocol-specific
+# incentive-design statements, not structural code bugs).
+vulnerability_class: economic
+target_protocol: "SelfLiquidationMarket (hand-authored demo)"
+hypothesis: >
+  The liquidation bonus is generous enough that a user can profitably
+  liquidate their OWN position with no price movement and no code bug
+  involved — just open a position near the liquidation threshold, then
+  immediately self-liquidate. No oracle manipulation, no reentrancy:
+  the "exploit" is simply the most profitable rational action the
+  protocol's own incentive math makes available.
+
+attacker:
+  initial_eth: 10.0
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"
+  fork_block: 19000000
+  target_contracts:
+    market: "0x8888888888888888888888888888888888888888"
+  balances:
+    market: 100.0
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: market
+    function: "openPosition(uint256,uint256)"
+    args: [10.0, 9.0]
+    comment: "open a tight 90%-LTV position — deliberately close to the liquidation threshold"
+  - step_id: 2
+    caller: attacker
+    target: market
+    function: "selfLiquidate()"
+    comment: "immediately liquidate the position they just opened"
+
+success_conditions:
+  - expression: "attacker.eth_balance_after > attacker.eth_balance_before"
+    description: "attacker ended up with more ETH than they started with, purely from liquidation-bonus math"
+
+assumptions:
+  - "this specific scenario needs liquidation_bonus_bps high enough (>~1111bps for a 90%-LTV position) for the math to favor the attacker — see tests/test_cross_contract_upgrade_economic.py for the exact threshold demonstrated"

@@ -1,0 +1,44 @@
+# Hand-authored scenario — the same format a researcher would write for
+# accounting/upgradeability/cross_contract/economic (the classes with no
+# automatic scenario_planner builder). Using reentrancy here only because
+# it's the one with a ready-made mock executor to actually run against;
+# the YAML shape and CLI command are identical regardless of class.
+vulnerability_class: reentrancy
+target_protocol: HandAuthoredDemoVault
+hypothesis: >
+  withdraw() sends ETH before zeroing the internal balance mapping —
+  hand-written to double-check the planner-generated version independently.
+
+attacker:
+  initial_eth: 2.0
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"
+  fork_block: 19000000
+  target_contracts:
+    vault: "0x2222222222222222222222222222222222222222"
+  balances:
+    vault: 15.0
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: vault
+    function: "deposit()"
+    value_eth: 1.9
+    comment: "establish a legitimate position"
+  - step_id: 2
+    caller: attacker
+    target: attacker
+    function: "attack()"
+    comment: "trigger the reentrant withdraw loop"
+
+success_conditions:
+  - expression: "attacker.eth_balance_after - attacker.eth_balance_before > attacker.legitimate_entitlement"
+    description: "attacker extracted more ETH than they legitimately deposited"
+
+invariants_under_test:
+  - "vault.eth_balance_after >= 0"
+
+assumptions:
+  - "vault pool has other depositors' liquidity beyond the attacker's own 1.9 ETH"

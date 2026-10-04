@@ -1,0 +1,23 @@
+vulnerability_class: initialization
+display_name: "Unprotected / Front-runnable Initializer"
+description: >
+  An upgradeable contract's initialize() has no 'initializer' modifier
+  (or the modifier is missing on a parent contract in the inheritance
+  chain), letting anyone call it — either to front-run the real
+  deployer and become the owner/admin, or to re-initialize state later
+  if the guard is merely absent rather than enforced once.
+
+default_invariants:
+  - "contract.initialized_by == contract.intended_deployer"
+
+default_success_conditions:
+  - expression: "attacker.became_owner_via_initialize == true"
+    description: "Attacker front-ran or repeated initialize() to seize a privileged role"
+
+heuristic_source_patterns:
+  - pattern: 'function initialize('
+    note: "check for the `initializer` modifier AND that every parent contract in the inheritance chain is also guarded"
+  - pattern: '_disableInitializers'
+    note: "good sign if present in the constructor of an implementation contract — absence is the flag, not the presence"
+
+attacker_template: attacker_template.sol.j2

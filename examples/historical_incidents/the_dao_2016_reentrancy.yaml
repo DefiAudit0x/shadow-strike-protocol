@@ -1,0 +1,45 @@
+# Simplified reconstruction — see README.md's honesty note.
+vulnerability_class: reentrancy
+target_protocol: "TheDAO (2016, simplified reconstruction)"
+hypothesis: >
+  splitDAO() sent the withdrawer's ETH share before updating their
+  internal token/balance record, letting a recursive fallback function
+  call back into splitDAO() repeatedly before the first call's balance
+  update ever executed — draining far more than the attacker's actual
+  DAO token holding entitled them to. This is the incident that led to
+  the ETH/ETC chain split.
+
+attacker:
+  initial_eth: 1.0
+
+initial_state:
+  fork_url: "https://eth-mainnet.example/rpc"   # real replay would fork at ~block 1718497
+  fork_block: 1718497
+  target_contracts:
+    vault: "0xbb9bc244d798123fde783fcc1c72d3bb8c189413"   # TheDAO's real mainnet address, for reference only
+  balances:
+    vault: 37.0   # standing in for "the DAO's pooled ETH reserve" at toy scale
+
+steps:
+  - step_id: 1
+    caller: attacker
+    target: vault
+    function: "deposit()"
+    value_eth: 0.9
+    comment: "acquire a legitimate (small) DAO token position"
+  - step_id: 2
+    caller: attacker
+    target: attacker
+    function: "attack()"
+    comment: "trigger the recursive split/withdraw — real TheDAO exploit recursed ~dozens of times per tx"
+
+success_conditions:
+  - expression: "attacker.eth_balance_after - attacker.eth_balance_before > attacker.legitimate_entitlement"
+    description: "attacker drained more ETH than their actual token holding entitled them to"
+
+invariants_under_test:
+  - "vault.eth_balance_after >= 0"
+
+assumptions:
+  - "mock engine only — real replay needs the actual TheDAO bytecode forked at its deployment block"
+  - "loss figure commonly reported as ~3.6M ETH; not independently re-verified in this session"

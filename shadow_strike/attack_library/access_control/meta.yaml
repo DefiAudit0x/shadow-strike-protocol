@@ -1,0 +1,21 @@
+vulnerability_class: access_control
+display_name: "Broken Access Control"
+description: >
+  A privileged function (admin-only, owner-only, role-gated) is missing
+  its guard, or the guard checks the wrong condition (e.g. tx.origin
+  instead of msg.sender, or a role that was never actually granted).
+
+default_invariants:
+  - "contract.privileged_state_changed_by == contract.authorized_role_holder"
+
+default_success_conditions:
+  - expression: "attacker.gained_privileged_capability == true"
+    description: "Attacker successfully invoked a privileged function without authorization"
+
+heuristic_source_patterns:
+  - pattern: 'tx.origin'
+    note: "tx.origin used for auth — classic phishing-via-contract vector"
+  - pattern: 'onlyOwner'
+    note: "modifier present — verify it is actually applied to every sensitive function, not just named ones"
+
+attacker_template: attacker_template.sol.j2

@@ -1,0 +1,26 @@
+vulnerability_class: oracle_manipulation
+display_name: "Oracle Price Manipulation"
+description: >
+  A protocol derives a critical value (collateral ratio, swap price,
+  liquidation threshold) from a manipulable source (thin-liquidity spot
+  pool, single-block TWAP) rather than a resistant oracle. Composes with
+  flash_loan: the attacker typically doesn't have enough capital to move
+  the pool on their own, so they borrow it atomically.
+
+default_invariants:
+  - "protocol.collateral_value_after >= protocol.debt_value_after"
+
+default_success_conditions:
+  - expression: "attacker.eth_balance_after - attacker.eth_balance_before > 0"
+    description: "Attacker extracted value purely from a manipulated price read"
+
+heuristic_source_patterns:
+  - pattern: 'getReserves()'
+    note: "raw AMM reserves used as a price source — flash-loan manipulable"
+  - pattern: 'latestAnswer()'
+    note: "Chainlink-style read — check staleness/deviation checks exist"
+  - pattern: 'balanceOf(address(this))'
+    note: "spot balance used to infer price/share value — single-tx manipulable"
+
+attacker_template: attacker_template.sol.j2
+composes_with: [flash_loan]
