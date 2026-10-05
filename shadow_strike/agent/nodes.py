@@ -18,7 +18,8 @@ The six nodes of the reasoning loop. Strict separation enforced here:
 from __future__ import annotations
 
 import re
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Optional
 
 from shadow_strike.core.models import (
     AttackScenario, AttackerModel, InitialState, TransactionStep,

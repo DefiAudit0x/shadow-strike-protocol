@@ -5,6 +5,30 @@ actually built. Kept honest on purpose: entries note what was tested
 live versus what was written but needs infrastructure this project
 was built without (network, a real LLM key, Postgres, Foundry).
 
+## [0.6.1] — first real Foundry run (on GitHub Actions, not this sandbox)
+
+### Fixed
+- **Real bug #4, and the first one caught on an actual EVM rather than
+  the Python mock**: `VaultReentrancy.t.sol`'s
+  `test_reentrancy_drains_vulnerable_vault` asserted the vault would be
+  drained to exactly zero. It isn't — `MaliciousReceiver_demo.sol` caps
+  reentry at `MAX_REENTRIES = 3` (a deliberate gas/safety bound on the
+  attacker contract itself), so the real exploit drains exactly 4 ETH
+  (1 initial `withdraw()` + 3 reentrant ones) out of an 11 ETH pool,
+  not all of it. Fixed the assertions to check what the bug actually
+  guarantees — the attacker profits well beyond their own deposit, and
+  the vault loses funds belonging to OTHER depositors, not just the
+  attacker's own stake — rather than an unrealistic "fully drained"
+  claim. Confirmed against the actual forge trace output (attacker:
+  1→5 ETH, vault: 11→7 ETH) before committing the fix.
+- Partial `ruff` lint cleanup (import ordering, `typing.Callable` →
+  `collections.abc.Callable` per UP035) in `monitoring/watcher.py`,
+  `storage/postgres_store.py`, `verifier/verifier.py`,
+  `agent/nodes.py` — 4 of the 37 flagged issues, the ones visible in
+  the CI log excerpt. The lint job is `continue-on-error: true` so
+  this was never blocking; `ruff check --fix` locally will clean up
+  the remaining ~32 auto-fixable ones in one pass.
+
 ## [0.6.0] — 11/11 vulnerability classes now have live execution proof
 
 ### Added

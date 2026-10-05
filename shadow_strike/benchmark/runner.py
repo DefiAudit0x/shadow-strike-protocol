@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from shadow_strike.agent.nodes import recon_node, hypothesis_node, SCENARIO_BUILDERS
+from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_node
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.verifier.verifier import Verifier
 from shadow_strike.core.models import AttackScenario

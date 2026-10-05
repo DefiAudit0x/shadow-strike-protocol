@@ -8,7 +8,7 @@ Deterministic verdict layer. No LLM call happens anywhere in this file
 from __future__ import annotations
 
 from shadow_strike.core.models import AttackScenario, ExecutionResult, VerificationResult
-from shadow_strike.core.safe_eval import safe_eval, UnsafeExpressionError
+from shadow_strike.core.safe_eval import UnsafeExpressionError, safe_eval
 
 
 class Verifier:

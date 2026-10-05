@@ -26,7 +26,15 @@ import uuid
 
 try:
     from sqlalchemy import (
-        create_engine, Column, String, Integer, Float, Text, ForeignKey, MetaData, Table,
+        Column,
+        Float,
+        ForeignKey,
+        Integer,
+        MetaData,
+        String,
+        Table,
+        Text,
+        create_engine,
     )
     from sqlalchemy.orm import sessionmaker
 except ImportError as e:

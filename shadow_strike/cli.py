@@ -23,7 +23,7 @@ from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.verifier.verifier import Verifier
 from shadow_strike.storage.db import KnowledgeStore
-from shadow_strike.core.scenario_loader import load_scenario_yaml, save_scenario_yaml, ScenarioFileError
+from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
 from shadow_strike.core.models import AttackScenario
 
 

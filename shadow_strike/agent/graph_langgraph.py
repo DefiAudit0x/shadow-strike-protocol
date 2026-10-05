@@ -14,7 +14,7 @@ intermediate state between steps).
 
 from __future__ import annotations
 
-from typing import TypedDict, Any
+from typing import Any, TypedDict
 
 try:
     from langgraph.graph import StateGraph, END

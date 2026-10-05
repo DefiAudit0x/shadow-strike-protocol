@@ -27,9 +27,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from shadow_strike.agent.nodes import SCENARIO_BUILDERS, recon_node, hypothesis_node
+from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_node
 from shadow_strike.attack_library.registry import AttackLibrary
-from shadow_strike.benchmark.runner import run_benchmark, BenchmarkReport
+from shadow_strike.benchmark.runner import BenchmarkReport, run_benchmark
 from shadow_strike.verifier.verifier import Verifier
 
 SEVERITY_BY_CLASS = {

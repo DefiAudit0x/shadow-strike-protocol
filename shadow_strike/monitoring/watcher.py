@@ -27,11 +27,12 @@ what isn't:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Protocol
 
-from shadow_strike.benchmark.runner import run_benchmark, BenchmarkReport
 from shadow_strike.attack_library.registry import AttackLibrary
+from shadow_strike.benchmark.runner import BenchmarkReport, run_benchmark
 from shadow_strike.storage.db import KnowledgeStore
 
 
