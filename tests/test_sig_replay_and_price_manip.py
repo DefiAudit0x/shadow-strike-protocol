@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import unittest
 
-from shadow_strike.core.models import AttackScenario, AttackerModel, InitialState, TransactionStep, SuccessCondition
+from shadow_strike.core.models import (
+    AttackerModel,
+    AttackScenario,
+    InitialState,
+    SuccessCondition,
+    TransactionStep,
+)
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.verifier.verifier import Verifier
 

@@ -8,41 +8,45 @@ from __future__ import annotations
 
 import unittest
 
+from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
+from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import (
-    AttackScenario, AttackerModel, InitialState, TransactionStep,
-    SuccessCondition, ShadowStrikeValidationError,
+    AttackerModel,
+    AttackScenario,
+    InitialState,
+    ShadowStrikeValidationError,
+    SuccessCondition,
+    TransactionStep,
 )
-from shadow_strike.core.safe_eval import safe_eval, UnsafeExpressionError
+from shadow_strike.core.safe_eval import UnsafeExpressionError, safe_eval
 from shadow_strike.execution.compiler import ScenarioCompiler
 from shadow_strike.execution.mock_executor import MockExecutor
-from shadow_strike.verifier.verifier import Verifier
-from shadow_strike.attack_library.registry import AttackLibrary
-from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
 from shadow_strike.storage.db import KnowledgeStore
+from shadow_strike.verifier.verifier import Verifier
 
 
 def _make_scenario(**overrides):
-    base = dict(
-        vulnerability_class="reentrancy",
-        target_protocol="TestVault",
-        hypothesis="test hypothesis",
-        attacker=AttackerModel(initial_eth=1.0),
-        initial_state=InitialState(
+    base = {
+        "vulnerability_class": "reentrancy",
+        "target_protocol": "TestVault",
+        "hypothesis": "test hypothesis",
+        "attacker": AttackerModel(initial_eth=1.0),
+        "initial_state": InitialState(
             fork_url="https://example/rpc", fork_block=1,
             target_contracts={"vault": "0xabc"},
             balances={"vault": 9.0},
         ),
-        steps=[
+        "steps": [
             TransactionStep(step_id=1, caller="attacker", target="vault", function="deposit()", value_eth=0.9),
             TransactionStep(step_id=2, caller="attacker", target="attacker", function="attack()"),
         ],
-        success_conditions=[
+        "success_conditions": [
             SuccessCondition(
                 expression="attacker.eth_balance_after - attacker.eth_balance_before > attacker.legitimate_entitlement",
                 description="profited",
             )
         ],
-    )
+    }
     base.update(overrides)
     return AttackScenario(**base)
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from shadow_strike.integrations.axiom_adapter import SentinelHypothesisRequest, handle_sentinel_request
 from shadow_strike.execution.mock_executor import MockExecutor
+from shadow_strike.integrations.axiom_adapter import SentinelHypothesisRequest, handle_sentinel_request
 
 SOURCE = """
 contract SentinelTestVault {

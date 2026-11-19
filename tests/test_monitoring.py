@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import unittest
 
-from shadow_strike.monitoring.watcher import ContinuousMonitor, DeploymentEvent
 from shadow_strike.execution.mock_executor import MockExecutor
+from shadow_strike.monitoring.watcher import ContinuousMonitor, DeploymentEvent
 
 VULNERABLE_SOURCE = """
 contract V { function withdraw() external { msg.sender.call{value: 1}(""); } }
