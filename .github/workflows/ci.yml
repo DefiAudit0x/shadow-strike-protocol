@@ -43,7 +43,6 @@ jobs:
         run: pip install ruff
       - name: Lint
         run: ruff check shadow_strike/ --line-length 110
-        continue-on-error: true   # advisory only until the codebase is ruff-clean
 
   foundry-tests:
     runs-on: ubuntu-latest
