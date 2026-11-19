@@ -21,11 +21,16 @@ difference, by design.
 from __future__ import annotations
 
 from pathlib import Path
+
 import yaml
 
 from shadow_strike.core.models import (
-    AttackScenario, AttackerModel, InitialState, TransactionStep, SuccessCondition,
+    AttackerModel,
+    AttackScenario,
+    InitialState,
     ShadowStrikeValidationError,
+    SuccessCondition,
+    TransactionStep,
 )
 
 

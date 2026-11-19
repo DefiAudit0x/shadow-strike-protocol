@@ -155,7 +155,7 @@ class AttackScenario:
         return json.dumps(self.to_dict(), default=str, **kw)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "AttackScenario":
+    def from_dict(cls, d: dict) -> AttackScenario:
         d = dict(d)
         d["attacker"] = AttackerModel(**d["attacker"])
         init_state = dict(d["initial_state"])
@@ -168,7 +168,7 @@ class AttackScenario:
         return cls(**d)
 
     @classmethod
-    def from_json(cls, s: str) -> "AttackScenario":
+    def from_json(cls, s: str) -> AttackScenario:
         return cls.from_dict(json.loads(s))
 
 
