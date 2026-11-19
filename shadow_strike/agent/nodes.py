@@ -138,6 +138,25 @@ def _build_access_control_scenario(chosen, target_contracts, attacker_initial_et
                                     library, protocol_name, state) -> AttackScenario:
     primary_alias = next(iter(target_contracts))
     default_sc = library.default_success_conditions("access_control")
+    default_inv = library.default_invariants("access_control")
+
+    # Library defaults are written against a `{target}` placeholder and
+    # resolved here to this scenario's primary alias: the mock emits
+    # per-contract state (last_caller, privileged_state) under the
+    # contract's alias, and a literal alias in meta.yaml would only
+    # verify when the target happened to be named that way (P1-2).
+    raw_sc = default_sc or [{
+        "expression": f"{primary_alias}.last_caller == 'attacker'",
+        "description": "unauthorized caller successfully invoked the privileged function",
+    }]
+    success_conditions = [
+        SuccessCondition(
+            expression=sc["expression"].replace("{target}", primary_alias),
+            description=sc["description"],
+        )
+        for sc in raw_sc
+    ]
+    invariants = [inv.replace("{target}", primary_alias) for inv in default_inv]
 
     return AttackScenario(
         vulnerability_class="access_control",
@@ -149,10 +168,8 @@ def _build_access_control_scenario(chosen, target_contracts, attacker_initial_et
             TransactionStep(step_id=1, caller="attacker", target=primary_alias, function="privilegedAction()",
                              comment="call a privileged function directly, as an unauthorized caller"),
         ],
-        success_conditions=[SuccessCondition(**sc) for sc in (default_sc or [{
-            "expression": f"{primary_alias}.last_caller == 'attacker'",
-            "description": "unauthorized caller successfully invoked the privileged function",
-        }])],
+        success_conditions=success_conditions,
+        invariants_under_test=invariants,
     )
 
 
