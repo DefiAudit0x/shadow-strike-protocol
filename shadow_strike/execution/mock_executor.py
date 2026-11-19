@@ -39,7 +39,7 @@ class Ledger:
     def get(self, alias: str) -> float:
         return self.balances.get(alias, 0.0)
 
-    def transfer(self, frm: str, to: str, amount: float, world: "MockWorld") -> None:
+    def transfer(self, frm: str, to: str, amount: float, world: MockWorld) -> None:
         if amount <= 0:
             return
         if self.balances.get(frm, 0.0) < amount:
@@ -125,15 +125,18 @@ class ReentrantAttacker:
 
     def on_receive(self, amount: float, world: MockWorld):
         vault = world.contracts[self.target_alias]
-        if self.reentry_count < self.max_reentries and vault.deposits.get(self.target_alias, 0) >= 0:
+        if (
+            self.reentry_count < self.max_reentries
+            and vault.deposits.get(self.target_alias, 0) >= 0
+            and world.ledger.get(self.target_alias) >= amount
+        ):
             # mirrors the Solidity receive() guard: only reenter while the
             # vault still appears to have funds AND we haven't hit the cap
-            if world.ledger.get(self.target_alias) >= amount and self.reentry_count < self.max_reentries:
-                self.reentry_count += 1
-                try:
-                    vault.withdraw(self.alias, world)
-                except MockRevert:
-                    pass
+            self.reentry_count += 1
+            try:
+                vault.withdraw(self.alias, world)
+            except MockRevert:
+                pass
 
 
 class MockFlashLender:
@@ -587,7 +590,7 @@ class MaliciousImplementation:
     def __init__(self, alias: str):
         self.alias = alias
 
-    def run(self, proxy: "VulnerableProxy", caller: str, world: MockWorld):
+    def run(self, proxy: VulnerableProxy, caller: str, world: MockWorld):
         proxy.owner = caller   # the collision: this contract's own var0 overwrites the proxy's owner slot
 
 
@@ -801,7 +804,7 @@ class MockExecutor:
         )
 
     def _dispatch(self, step, world: MockWorld):
-        target = world.contracts[step.target] if step.target in world.contracts else None
+        target = world.contracts.get(step.target)
         fn_name = step.function.split("(")[0]
         caller = "attacker" if step.caller == "attacker" else step.caller
         if target is None:
