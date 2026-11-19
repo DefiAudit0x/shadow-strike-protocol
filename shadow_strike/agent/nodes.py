@@ -19,13 +19,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Optional
 
-from shadow_strike.core.models import (
-    AttackScenario, AttackerModel, InitialState, TransactionStep,
-    SuccessCondition, VulnerabilityClass,
-)
 from shadow_strike.attack_library.registry import AttackLibrary
+from shadow_strike.core.models import (
+    AttackerModel,
+    AttackScenario,
+    InitialState,
+    SuccessCondition,
+    TransactionStep,
+    VulnerabilityClass,
+)
 from shadow_strike.verifier.verifier import Verifier
 
 LLMFn = Callable[[str], str]   # prompt -> completion; plug in a real model client here
@@ -34,7 +37,7 @@ LLMFn = Callable[[str], str]   # prompt -> completion; plug in a real model clie
 # ---------------------------------------------------------------------
 # 1. recon
 # ---------------------------------------------------------------------
-def recon_node(state: dict, llm_fn: Optional[LLMFn] = None) -> dict:
+def recon_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     source = state["target_contract_source"]
     functions = re.findall(r"function\s+(\w+)\s*\(([^)]*)\)", source)
     sensitive_calls = []
@@ -54,7 +57,7 @@ def recon_node(state: dict, llm_fn: Optional[LLMFn] = None) -> dict:
 # ---------------------------------------------------------------------
 # 2. hypothesis generation
 # ---------------------------------------------------------------------
-def hypothesis_node(state: dict, llm_fn: Optional[LLMFn] = None, library: AttackLibrary | None = None) -> dict:
+def hypothesis_node(state: dict, llm_fn: LLMFn | None = None, library: AttackLibrary | None = None) -> dict:
     library = library or AttackLibrary()
     source = state["target_contract_source"]
     hypotheses = []
@@ -212,66 +215,6 @@ def _build_signature_replay_scenario(chosen, target_contracts, attacker_initial_
         target_protocol=protocol_name,
         hypothesis=chosen["hypothesis"],
         attacker=AttackerModel(initial_eth=attacker_initial_eth),
-        initial_state=InitialState(
-            fork_url=fork_url, fork_block=fork_block, target_contracts=target_contracts,
-            balances={primary_alias: max(attacker_initial_eth * 3, 5.0)},
-        ),
-        steps=[
-            TransactionStep(step_id=1, caller="attacker", target=primary_alias, function="executeSignedAction()",
-                             comment="first (legitimate) use of the captured signature"),
-            TransactionStep(step_id=2, caller="attacker", target=primary_alias, function="executeSignedAction()",
-                             comment="replay the SAME signature/calldata a second time"),
-            TransactionStep(step_id=3, caller="attacker", target=primary_alias, function="executeSignedAction()",
-                             comment="replay a third time, to make the pattern unambiguous"),
-        ],
-        success_conditions=[SuccessCondition(
-            expression=f"{primary_alias}.replayed_count > 1",
-            description="the same signed authorization was consumed more than once",
-        )],
-    )
-
-
-def _build_price_manipulation_scenario(chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
-                                        library, protocol_name, state) -> AttackScenario:
-    primary_alias = next(iter(target_contracts))
-    seed_amount = max(attacker_initial_eth * 0.001, 0.001)
-    donation = max(attacker_initial_eth - seed_amount, 0.1)
-    victim_deposit = 5.0
-
-    return AttackScenario(
-        vulnerability_class="price_manipulation",
-        target_protocol=protocol_name,
-        hypothesis=chosen["hypothesis"],
-        attacker=AttackerModel(initial_eth=attacker_initial_eth),
-        initial_state=InitialState(
-            fork_url=fork_url, fork_block=fork_block, target_contracts=target_contracts,
-            balances={"victim": victim_deposit},
-        ),
-        steps=[
-            TransactionStep(step_id=1, caller="attacker", target=primary_alias, function="deposit()",
-                             value_eth=seed_amount, comment="become the first depositor for a trivial amount"),
-            TransactionStep(step_id=2, caller="attacker", target=primary_alias, function="donate()",
-                             value_eth=donation, comment="donate directly — inflates totalAssets, mints no shares"),
-            TransactionStep(step_id=3, caller="victim", target=primary_alias, function="deposit()",
-                             value_eth=victim_deposit, comment="a legitimate depositor arrives after the inflation"),
-            TransactionStep(step_id=4, caller="attacker", target=primary_alias, function="redeem()",
-                             comment="redeem the single inflated share for (almost) everything, including the victim's deposit"),
-        ],
-        success_conditions=[SuccessCondition(
-            expression=f"{primary_alias}.shares.victim == 0",
-            description="a legitimate depositor received zero shares for a nonzero deposit (inflation-attack signature)",
-        )],
-    )
-
-
-def _build_signature_replay_scenario(chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
-                                      library, protocol_name, state) -> AttackScenario:
-    primary_alias = next(iter(target_contracts))
-    return AttackScenario(
-        vulnerability_class="signature_replay",
-        target_protocol=protocol_name,
-        hypothesis=chosen["hypothesis"],
-        attacker=AttackerModel(initial_eth=attacker_initial_eth),
         initial_state=InitialState(fork_url=fork_url, fork_block=fork_block, target_contracts=target_contracts),
         steps=[
             TransactionStep(step_id=1, caller="attacker", target=primary_alias, function="executeSignedAction()",
@@ -323,8 +266,6 @@ SCENARIO_BUILDERS = {
     VulnerabilityClass.INITIALIZATION.value: _build_initialization_scenario,
     VulnerabilityClass.SIGNATURE_REPLAY.value: _build_signature_replay_scenario,
     VulnerabilityClass.PRICE_MANIPULATION.value: _build_price_manipulation_scenario,
-    VulnerabilityClass.SIGNATURE_REPLAY.value: _build_signature_replay_scenario,
-    VulnerabilityClass.PRICE_MANIPULATION.value: _build_price_manipulation_scenario,
     # flash_loan is intentionally absent: it composes WITH another class
     # rather than having its own scenario shape (see meta.yaml
     # composes_with) — the planner routes a flash-loan-flagged hypothesis
@@ -338,7 +279,7 @@ def scenario_planner_node(
     fork_block: int,
     target_contracts: dict[str, str],
     attacker_initial_eth: float = 1.0,
-    llm_fn: Optional[LLMFn] = None,
+    llm_fn: LLMFn | None = None,
     library: AttackLibrary | None = None,
 ) -> dict:
     library = library or AttackLibrary()
@@ -412,7 +353,7 @@ def verifier_node(state: dict, verifier: Verifier | None = None) -> dict:
 #    adjustment. Rule-based fallback mirrors what a prompted LLM would
 #    plausibly suggest, so the retry loop is demonstrable offline.
 # ---------------------------------------------------------------------
-def critic_node(state: dict, llm_fn: Optional[LLMFn] = None) -> dict:
+def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     verdict = state.get("verifier_verdict")
     execution_result = state.get("execution_result")
     state["attempt_count"] = state.get("attempt_count", 0) + 1
