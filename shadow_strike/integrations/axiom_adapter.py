@@ -25,7 +25,7 @@ executors, proving the call contract itself works end to end.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_node
 from shadow_strike.attack_library.registry import AttackLibrary
