@@ -13,10 +13,12 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shadow_strike.agent.nodes import scenario_planner_node
+from shadow_strike.agent.nodes import hypothesis_node, scenario_planner_node
+from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
+    ExecutionResult,
     InitialState,
     SuccessCondition,
     TransactionStep,
@@ -119,6 +121,59 @@ class TestAccessControlLive(unittest.TestCase):
         fixed_result = verifier.verify(scenario, fixed.execute(scenario))
         self.assertFalse(fixed_result.verified)
         self.assertFalse(fixed_result.invariant_violations)
+
+
+class TestPlannerHypothesisOrder(unittest.TestCase):
+    def test_unsupported_first_hypothesis_does_not_mask_later_supported_class(self):
+        source = '''
+        contract Vault {
+            // unchecked {
+            function withdraw() external {
+                msg.sender.call{value: 1}("");
+            }
+        }
+        '''
+        state = hypothesis_node({"target_contract_source": source}, library=AttackLibrary())
+        self.assertEqual([hypothesis["vulnerability_class"] for hypothesis in state["hypotheses"]], [
+            "accounting", "reentrancy",
+        ])
+        planned = scenario_planner_node(
+            state, fork_url="", fork_block=0, target_contracts={"vault": "0xabc"},
+            library=AttackLibrary(),
+        )
+        scenario = planned["current_scenario"]
+        self.assertIsNotNone(scenario)
+        self.assertEqual(scenario.vulnerability_class.value, "reentrancy")
+        self.assertNotEqual(planned.get("verdict"), "unsupported_class")
+
+        executor = MockExecutor(contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"})
+        execution = executor.execute(scenario)
+        self.assertTrue(Verifier().verify(scenario, execution).verified)
+
+
+class TestReentrancyProfitThreshold(unittest.TestCase):
+    def test_positive_theft_over_starting_entitlement_verifies(self):
+        planned = scenario_planner_node(
+            {"hypotheses": [{"vulnerability_class": "reentrancy", "hypothesis": "withdraw reenters"}]},
+            fork_url="", fork_block=0, target_contracts={"vault": "0xabc"},
+            attacker_initial_eth=1.0, library=AttackLibrary(),
+        )
+        scenario = planned["current_scenario"]
+
+        for after, expected in ((1.9, True), (1.0, False)):
+            with self.subTest(after=after):
+                execution = ExecutionResult(
+                    scenario_id=scenario.scenario_id, reverted=False, revert_reason=None,
+                    state_vars={"attacker": {
+                        "eth_balance_before": 1.0,
+                        "eth_balance_after": after,
+                        "legitimate_entitlement": 1.0,
+                    }},
+                    state_diff={}, call_trace=[], engine="mock",
+                )
+                result = Verifier().verify(scenario, execution)
+                self.assertEqual(result.verified, expected)
+                self.assertEqual(result.verdict, "verified" if expected else "resisted")
 
 
 class TestOracleManipulationLive(unittest.TestCase):
