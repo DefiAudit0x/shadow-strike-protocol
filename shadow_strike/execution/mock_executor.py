@@ -865,16 +865,23 @@ class MockExecutor:
 
         state_vars = {}
         for alias in set(list(before.keys()) + list(after.keys())):
+            # Round to 12 decimals: the mock ledger is float-based, so a
+            # deposit/withdraw round trip can leave ~1e-16 residue (e.g.
+            # 0.9000000000000001 for 0.9) that must not read as theft in a
+            # strict > comparison against the entitlement. 12 decimals is
+            # far below any real theft the mock models and far above the
+            # residue; the Foundry path needs no rounding — it derives both
+            # sides from integer wei through the same conversion.
             state_vars[alias] = {
-                "eth_balance_before": before.get(alias, 0.0),
-                "eth_balance_after": after.get(alias, 0.0),
+                "eth_balance_before": round(before.get(alias, 0.0), 12),
+                "eth_balance_after": round(after.get(alias, 0.0), 12),
             }
         # Starting-capital baseline used by the reentrancy condition, which
         # compares gross ending balance against entitlement (not net gain
         # against the same starting balance). The baseline is the effective
         # starting funding captured after the balances overrides above.
         if "attacker" in state_vars:
-            state_vars["attacker"]["legitimate_entitlement"] = effective_attacker_funding
+            state_vars["attacker"]["legitimate_entitlement"] = round(effective_attacker_funding, 12)
 
         # generic extension point: any mock contract exposing state_vars()
         # gets those merged in under its own alias, so success_conditions
