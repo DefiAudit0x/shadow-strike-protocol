@@ -332,7 +332,11 @@ def scenario_planner_node(
         if scenario.steps and scenario.steps[0].function.startswith(("deposit", "attack")):
             scenario.steps[0].value_eth = max(scenario.attacker.initial_eth - 0.1, 0.1)
     elif adjustment == "increase_max_reentries":
-        state["_max_reentries_override"] = state.get("_max_reentries_override", 3) + 2
+        # The override used to be written to state["_max_reentries_override"],
+        # which nothing ever read. The adjustment now lives on the scenario
+        # itself, and the mock executor reads it when constructing the
+        # attacker (Part 9).
+        scenario.attacker_max_reentries += 2
 
     state["current_scenario"] = scenario
     return state
@@ -367,6 +371,20 @@ def verifier_node(state: dict, verifier: Verifier | None = None) -> dict:
     return state
 
 
+def _effective_max_retries(state: dict, default: int) -> int:
+    """Retry bound for the graph loop (Part 9).
+
+    The scenario carries its own max_retries; the graph has its own
+    constructor default. The loop stops at whichever bound is tighter, so
+    a scenario that asks for fewer retries is honoured and the graph's
+    operator cap still holds when the scenario asks for more.
+    """
+    scenario = state.get("current_scenario")
+    if scenario is not None:
+        return min(default, scenario.max_retries)
+    return default
+
+
 # ---------------------------------------------------------------------
 # 6. critic — analyzes a failed attempt and proposes ONE concrete
 #    adjustment. Rule-based fallback mirrors what a prompted LLM would
@@ -386,6 +404,14 @@ def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     elif verdict and not verdict.verified:
         reason = "success_conditions not met"
         adjustment = "increase_max_reentries"
+
+    # Do not repeat a failed adjustment: if an earlier attempt already
+    # tried this adjustment and still failed, there is nothing new to try
+    # (Part 9 — the critic reads state["history"]).
+    if adjustment is not None:
+        tried = [h.get("adjustment_applied") for h in state.get("history", [])]
+        if adjustment in tried:
+            adjustment = None
 
     state["history"] = state.get("history", []) + [{
         "attempt": state["attempt_count"],

@@ -26,6 +26,7 @@ except ImportError as e:
     ) from e
 
 from shadow_strike.agent.nodes import (
+    _effective_max_retries,
     critic_node,
     executor_node,
     hypothesis_node,
@@ -83,7 +84,9 @@ def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries:
         verdict = state.get("verifier_verdict")
         if verdict is not None and verdict.verified:
             return "success"
-        if state.get("attempt_count", 0) >= max_retries:
+        # Part 9: the bound is the tighter of the graph's cap and the
+        # scenario's own max_retries.
+        if state.get("attempt_count", 0) >= _effective_max_retries(state, max_retries):
             return "give_up"
         return "retry"
 

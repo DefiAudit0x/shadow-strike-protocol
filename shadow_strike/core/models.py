@@ -124,6 +124,10 @@ class AttackScenario:
     assumptions: list[str] = field(default_factory=list)
     invariants_under_test: list[str] = field(default_factory=list)
     max_retries: int = 3
+    # Reentry depth the mock executor's attacker uses. The critic's
+    # "increase_max_reentries" adjustment raises this on the next attempt;
+    # the mock reads it when constructing the attacker (Part 9).
+    attacker_max_reentries: int = 3
 
     # ---- validation -----------------------------------------------------
     def __post_init__(self):
@@ -144,6 +148,8 @@ class AttackScenario:
             raise ShadowStrikeValidationError(f"scenario {self.scenario_id}: duplicate step_id values")
         if self.max_retries < 0:
             raise ShadowStrikeValidationError("max_retries cannot be negative")
+        if self.attacker_max_reentries < 0:
+            raise ShadowStrikeValidationError("attacker_max_reentries cannot be negative")
 
     # ---- (de)serialization -----------------------------------------------
     def to_dict(self) -> dict:

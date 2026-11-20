@@ -702,7 +702,11 @@ class MockExecutor:
                     a for a, k in self.contract_kinds.items()
                     if k not in ("ReentrantAttacker", "OracleManipulationAttacker")
                 )
-                world.contracts[alias] = ReentrantAttacker(alias, target_alias)
+                # Part 9: the scenario carries the critic-adjusted reentry
+                # depth; the default (3) matches AttackScenario's default.
+                world.contracts[alias] = ReentrantAttacker(
+                    alias, target_alias, max_reentries=scenario.attacker_max_reentries,
+                )
             elif cls is SimplePool:
                 world.contracts[alias] = SimplePool(
                     alias,
@@ -764,6 +768,7 @@ class MockExecutor:
             elif kind == "flashloan_reentrant_attacker":
                 world.contracts[alias] = FlashLoanReentrantAttacker(
                     alias, lender_alias=params["lender_alias"], vault_alias=params["vault_alias"],
+                    max_reentries=scenario.attacker_max_reentries,
                 )
 
         ledger.balances["attacker"] = scenario.attacker.initial_eth
