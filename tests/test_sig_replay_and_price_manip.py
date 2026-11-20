@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 
+from shadow_strike.agent.nodes import _build_price_manipulation_scenario
 from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
@@ -11,7 +12,7 @@ from shadow_strike.core.models import (
     SuccessCondition,
     TransactionStep,
 )
-from shadow_strike.execution.mock_executor import MockExecutor
+from shadow_strike.execution.mock_executor import ERC4626LikeVault, Ledger, MockExecutor, MockWorld
 from shadow_strike.verifier.verifier import Verifier
 
 
@@ -44,18 +45,10 @@ class TestSignatureReplayLive(unittest.TestCase):
 
 
 class TestPriceManipulationLive(unittest.TestCase):
-    def _scenario(self):
-        return AttackScenario(
-            vulnerability_class="price_manipulation", target_protocol="VaultTest",
-            hypothesis="first-depositor donation/inflation attack",
-            attacker=AttackerModel(initial_eth=10.0),
-            initial_state=InitialState(fork_url="x", fork_block=1, target_contracts={"vault": "0xdef"},
-                                       balances={"victim": 1.0}),
-            steps=[
-                TransactionStep(step_id=1, caller="attacker", target="attacker", function="attack()", value_eth=9.99, args=[9.99]),
-                TransactionStep(step_id=2, caller="victim", target="vault", function="deposit()", value_eth=1.0),
-            ],
-            success_conditions=[SuccessCondition(expression="vault.victim_shares < 0.01", description="victim got ~nothing")],
+    def _scenario(self, initial_eth=10.0):
+        return _build_price_manipulation_scenario(
+            {"hypothesis": "first-depositor donation/inflation attack"},
+            {"vault": "0xdef"}, initial_eth, "x", 1, None, "VaultTest", {},
         )
 
     def test_vulnerable_vault_rounds_victim_to_zero(self):
@@ -64,8 +57,32 @@ class TestPriceManipulationLive(unittest.TestCase):
             contract_kinds={"vault": "ERC4626LikeVault", "attacker": "ShareInflationAttacker"},
             contract_params={"vault": {"donation_resistant": False}, "attacker": {"vault_alias": "vault"}},
         )
-        verdict = Verifier().verify(s, executor.execute(s))
-        self.assertTrue(verdict.verified)
+        result = executor.execute(s)
+        self.assertFalse(result.reverted)
+        self.assertIs(type(result.state_vars["vault"]["victim_shares"]), int)
+        self.assertEqual(result.state_vars["vault"]["victim_shares"], 0)
+        self.assertEqual(result.state_vars["vault"]["victim_claim_eth"], 0)
+        self.assertTrue(Verifier().verify(s, result).verified)
+
+    def test_partial_rounding_loss_is_measured_by_redeemable_claim(self):
+        scenario = self._scenario(initial_eth=1.0)
+        executor = MockExecutor(
+            contract_kinds={"vault": "ERC4626LikeVault", "attacker": "ShareInflationAttacker"},
+            contract_params={"attacker": {"vault_alias": "vault"}},
+        )
+        result = executor.execute(scenario)
+        vault = result.state_vars["vault"]
+        self.assertFalse(result.reverted)
+        self.assertEqual(vault["victim_shares"], 1)
+        self.assertEqual(vault["victim_claim_eth"], 0.995)
+        self.assertTrue(Verifier().verify(scenario, result).verified)
+
+    def test_resistant_first_deposit_uses_the_virtual_ratio(self):
+        vault = ERC4626LikeVault("vault", donation_resistant=True)
+        world = MockWorld(Ledger({"first": 1e-9, "second": 1e-9}))
+        vault.deposit("first", world, msg_value=1e-9)
+        vault.deposit("second", world, msg_value=1e-9)
+        self.assertEqual(vault.shares_of, {"first": 1_000_000_000, "second": 1_000_000_000})
 
     def test_donation_resistant_vault_protects_victim(self):
         s = self._scenario()
@@ -76,7 +93,7 @@ class TestPriceManipulationLive(unittest.TestCase):
         result = executor.execute(s)
         verdict = Verifier().verify(s, result)
         self.assertFalse(verdict.verified)
-        self.assertGreater(result.state_vars["vault"]["victim_shares"], 1000)  # victim got real shares
+        self.assertAlmostEqual(result.state_vars["vault"]["victim_claim_eth"], 1.0, places=8)
 
 
 if __name__ == "__main__":
