@@ -58,10 +58,14 @@ def _resolve_dotted(node: ast.AST, context: dict[str, Any]) -> Any:
     """Resolve Name / Attribute chains like `attacker.eth_balance_after`
     against a flat or nested dict context."""
     if isinstance(node, ast.Name):
+        if node.id.startswith("_"):
+            raise UnsafeExpressionError("private identifiers are not allowed")
         if node.id not in context:
             raise UnsafeExpressionError(f"unknown identifier: {node.id!r}")
         return context[node.id]
     if isinstance(node, ast.Attribute):
+        if node.attr.startswith("_"):
+            raise UnsafeExpressionError("private attributes are not allowed")
         base = _resolve_dotted(node.value, context)
         if isinstance(base, dict):
             if node.attr not in base:
@@ -87,7 +91,7 @@ def _eval_node(node: ast.AST, context: dict[str, Any]) -> Any:
             raise UnsafeExpressionError(f"disallowed binary operator: {type(node.op).__name__}")
         left = _eval_node(node.left, context)
         right = _eval_node(node.right, context)
-        return ast.literal_eval(ast.dump(node)) if False else _apply_binop(node.op, left, right)
+        return _apply_binop(node.op, left, right)
     if isinstance(node, ast.UnaryOp):
         if not isinstance(node.op, _ALLOWED_UNARYOPS):
             raise UnsafeExpressionError(f"disallowed unary operator: {type(node.op).__name__}")
