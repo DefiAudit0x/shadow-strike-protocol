@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import unittest
 
+from shadow_strike.agent.nodes import scenario_planner_node
 from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
@@ -66,6 +67,52 @@ class TestAccessControlLive(unittest.TestCase):
         result = executor.execute(s)
         self.assertTrue(result.reverted)
         self.assertIn("not owner", result.revert_reason)
+
+    def test_access_control_pipeline_verdict(self):
+        """The planner-built scenario must verdict both directions through
+        MockExecutor + Verifier — broken guard verifies exploitable,
+        fixed guard does not (P1-2). The old library default
+        (attacker.gained_privileged_capability) was never emitted by any
+        executor, so the pipeline could never verify this class at all."""
+        state = {
+            "hypotheses": [{
+                "hypothesis": "privilegedAction() has no caller check",
+                "vulnerability_class": "access_control",
+            }],
+        }
+        planned = scenario_planner_node(
+            state, fork_url="https://example/rpc", fork_block=1,
+            target_contracts={"admin": "0xadmin"},
+        )
+        scenario = planned["current_scenario"]
+        self.assertIsNotNone(scenario)
+        self.assertIsNone(planned.get("planner_error"))
+        # the planner's condition references only mock-emitted state vars
+        self.assertEqual(
+            [c.expression for c in scenario.success_conditions],
+            ["admin.last_caller == 'attacker'"],
+        )
+
+        verifier = Verifier()
+
+        broken = MockExecutor(
+            contract_kinds={"admin": "AccessControlTarget"},
+            contract_params={"admin": {"owner": "deployer", "enforce_check": False}},
+        )
+        broken_result = verifier.verify(scenario, broken.execute(scenario))
+        self.assertTrue(broken_result.verified)
+        self.assertTrue(broken_result.condition_results[0]["passed"])
+        self.assertIsNone(broken_result.condition_results[0]["error"])
+        # the invariant is violated exactly when the unauthorized call lands
+        self.assertTrue(broken_result.invariant_violations)
+
+        fixed = MockExecutor(
+            contract_kinds={"admin": "AccessControlTarget"},
+            contract_params={"admin": {"owner": "deployer", "enforce_check": True}},
+        )
+        fixed_result = verifier.verify(scenario, fixed.execute(scenario))
+        self.assertFalse(fixed_result.verified)
+        self.assertFalse(fixed_result.invariant_violations)
 
 
 class TestOracleManipulationLive(unittest.TestCase):
