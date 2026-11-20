@@ -2,8 +2,9 @@
 shadow_strike.attack_library.registry
 =======================================
 Loads one `meta.yaml` per vulnerability-class subfolder and exposes it
-as a plain dict. Adding a new attack class = adding a new folder with
-a meta.yaml + attacker template — nothing in the core engine changes.
+as a plain dict. Metadata supplies heuristic hints and default conditions;
+automated scenarios require a builder registered in agent/nodes.py.
+Foundry attacker contracts are supplied explicitly to ScenarioCompiler.
 """
 
 from __future__ import annotations
@@ -40,10 +41,6 @@ class AttackLibrary:
                 f"available: {self.available_classes()}"
             )
         return self._cache[vulnerability_class]
-
-    def attacker_template_path(self, vulnerability_class: str) -> Path:
-        meta = self.get(vulnerability_class)
-        return Path(meta["_dir"]) / meta["attacker_template"]
 
     def heuristic_patterns(self, vulnerability_class: str) -> list[dict]:
         return self.get(vulnerability_class).get("heuristic_source_patterns", [])
