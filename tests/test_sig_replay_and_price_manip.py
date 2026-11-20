@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from shadow_strike.agent.nodes import _build_price_manipulation_scenario
+from shadow_strike.agent.nodes import _build_price_manipulation_scenario, _build_signature_replay_scenario
 from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
@@ -17,6 +17,18 @@ from shadow_strike.verifier.verifier import Verifier
 
 
 class TestSignatureReplayLive(unittest.TestCase):
+    def test_planner_declares_string_argument_in_both_abi_signatures(self):
+        scenario = _build_signature_replay_scenario(
+            {"hypothesis": "a signature can be replayed"}, {"target": "0xabc"},
+            0.0, "x", 1, None, "SigTest", {},
+        )
+        self.assertEqual([step.function for step in scenario.steps], [
+            "executeSignedAction(string)", "executeSignedAction(string)",
+        ])
+        for step in scenario.steps:
+            self.assertEqual(len(step.args), 1)
+            self.assertEqual(step.function, f"executeSignedAction({','.join(['string'] * len(step.args))})")
+
     def _scenario(self):
         return AttackScenario(
             vulnerability_class="signature_replay", target_protocol="SigTest",

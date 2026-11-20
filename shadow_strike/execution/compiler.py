@@ -305,13 +305,18 @@ class ScenarioCompiler:
                 f"uint256 _{alias}EthAfter = address({alias}).balance;"
             )
 
+        # Effective starting funding: initial_state.balances overrides replace
+        # initial_eth for the vm.deal funding above, so the emitted entitlement
+        # must follow the override (same rule as MockExecutor).
+        effective_attacker_eth = scenario.initial_state.balances.get(
+            "attacker", scenario.attacker.initial_eth)
         emit_lines = [
             'emit log_named_uint("attacker_eth_before", _attackerEthBefore);',
             'emit log_named_uint("attacker_eth_after", _attackerEthAfter);',
         ]
         emit_lines.extend([
             'emit log_named_address("ss.attacker.address", address(attacker));',
-            f'emit log_named_uint("ss.attacker.legitimate_entitlement", {scenario.attacker.initial_eth} ether);',
+            f'emit log_named_uint("ss.attacker.legitimate_entitlement", {effective_attacker_eth} ether);',
         ])
         for alias in scenario.initial_state.target_contracts:
             for field, getters in {

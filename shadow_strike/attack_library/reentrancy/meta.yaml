@@ -15,8 +15,8 @@ description: >
 default_invariants: []
 
 default_success_conditions:
-  - expression: "attacker.eth_balance_after - attacker.eth_balance_before > attacker.legitimate_entitlement"
-    description: "Attacker extracted strictly more ETH than their legitimate entitlement"
+  - expression: "attacker.eth_balance_after > attacker.legitimate_entitlement"
+    description: "Attacker ended with more ETH than their starting entitlement"
 
 heuristic_source_patterns:
   # used by the zero-dependency rule-based hypothesis generator (agent/nodes.py)

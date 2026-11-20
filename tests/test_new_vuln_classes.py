@@ -13,10 +13,12 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shadow_strike.agent.nodes import scenario_planner_node
+from shadow_strike.agent.nodes import hypothesis_node, scenario_planner_node
+from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
+    ExecutionResult,
     InitialState,
     SuccessCondition,
     TransactionStep,
@@ -119,6 +121,214 @@ class TestAccessControlLive(unittest.TestCase):
         fixed_result = verifier.verify(scenario, fixed.execute(scenario))
         self.assertFalse(fixed_result.verified)
         self.assertFalse(fixed_result.invariant_violations)
+
+
+class TestPlannerHypothesisOrder(unittest.TestCase):
+    def test_unsupported_first_hypothesis_does_not_mask_later_supported_class(self):
+        source = '''
+        contract Vault {
+            // unchecked {
+            function withdraw() external {
+                msg.sender.call{value: 1}("");
+            }
+        }
+        '''
+        state = hypothesis_node({"target_contract_source": source}, library=AttackLibrary())
+        self.assertEqual([hypothesis["vulnerability_class"] for hypothesis in state["hypotheses"]], [
+            "accounting", "reentrancy",
+        ])
+        planned = scenario_planner_node(
+            state, fork_url="", fork_block=0, target_contracts={"vault": "0xabc"},
+            library=AttackLibrary(),
+        )
+        scenario = planned["current_scenario"]
+        self.assertIsNotNone(scenario)
+        self.assertEqual(scenario.vulnerability_class.value, "reentrancy")
+        self.assertNotEqual(planned.get("verdict"), "unsupported_class")
+
+        executor = MockExecutor(contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"})
+        execution = executor.execute(scenario)
+        self.assertTrue(Verifier().verify(scenario, execution).verified)
+
+
+class TestReentrancyProfitThreshold(unittest.TestCase):
+    def test_positive_theft_over_starting_entitlement_verifies(self):
+        planned = scenario_planner_node(
+            {"hypotheses": [{"vulnerability_class": "reentrancy", "hypothesis": "withdraw reenters"}]},
+            fork_url="", fork_block=0, target_contracts={"vault": "0xabc"},
+            attacker_initial_eth=1.0, library=AttackLibrary(),
+        )
+        scenario = planned["current_scenario"]
+
+        for after, expected in ((1.9, True), (1.0, False)):
+            with self.subTest(after=after):
+                execution = ExecutionResult(
+                    scenario_id=scenario.scenario_id, reverted=False, revert_reason=None,
+                    state_vars={"attacker": {
+                        "eth_balance_before": 1.0,
+                        "eth_balance_after": after,
+                        "legitimate_entitlement": 1.0,
+                    }},
+                    state_diff={}, call_trace=[], engine="mock",
+                )
+                result = Verifier().verify(scenario, execution)
+                self.assertEqual(result.verified, expected)
+                self.assertEqual(result.verdict, "verified" if expected else "resisted")
+
+
+class TestEntitlementFollowsEffectiveFunding(unittest.TestCase):
+    """CodeRabbit follow-up on PR #29 (Fix 7b): the reentrancy entitlement
+    must follow the attacker's effective starting funding, not initial_eth,
+    when initial_state.balances overrides it — otherwise a no-theft scenario
+    funded above initial_eth reads verified."""
+
+    def _scenario(self, balances):
+        return AttackScenario(
+            vulnerability_class="reentrancy",
+            target_protocol="TestVault",
+            hypothesis="withdraw reenters",
+            attacker=AttackerModel(initial_eth=1.0),
+            initial_state=InitialState(
+                fork_url="https://example/rpc", fork_block=1,
+                target_contracts={"vault": "0xabc"},
+                balances=balances,
+            ),
+            steps=[
+                TransactionStep(step_id=1, caller="attacker", target="vault",
+                                function="deposit()", value_eth=0.4),
+                TransactionStep(step_id=2, caller="attacker", target="attacker",
+                                function="attack()"),
+            ],
+            success_conditions=[
+                SuccessCondition(
+                    expression="attacker.eth_balance_after > attacker.legitimate_entitlement",
+                    description="attacker ended with more ETH than their starting entitlement",
+                ),
+            ],
+        )
+
+    def _run_safe(self, balances):
+        scenario = self._scenario(balances)
+        executor = MockExecutor(contract_kinds={"vault": "SafeVault", "attacker": "ReentrantAttacker"})
+        result = executor.execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        return scenario, result
+
+    def test_larger_balances_override_sets_entitlement(self):
+        scenario, result = self._run_safe({"vault": 9.0, "attacker": 2.0})
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 2.0)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+    def test_smaller_balances_override_sets_entitlement(self):
+        scenario, result = self._run_safe({"vault": 9.0, "attacker": 0.5})
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 0.5)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+    def test_no_override_keeps_initial_eth_entitlement(self):
+        scenario, result = self._run_safe({"vault": 9.0})
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 1.0)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+
+class TestFloatRoundTripIsNotTheft(unittest.TestCase):
+    """CodeRabbit follow-up on PR #29 (Fix 7c): the strict > comparison
+    between eth_balance_after and legitimate_entitlement treats float
+    rounding residue as theft — a safe 0.3 ETH deposit/withdraw round trip
+    on a 0.9 ETH funding leaves 0.9000000000000001, which then reads
+    verified. The mock must not emit that residue."""
+
+    def _scenario(self, vault_kind, override, deposit):
+        return AttackScenario(
+            vulnerability_class="reentrancy",
+            target_protocol="TestVault",
+            hypothesis="withdraw reenters",
+            attacker=AttackerModel(initial_eth=1.0),
+            initial_state=InitialState(
+                fork_url="https://example/rpc", fork_block=1,
+                target_contracts={"vault": "0xabc"},
+                balances={"vault": 9.0, "attacker": override},
+            ),
+            steps=[
+                TransactionStep(step_id=1, caller="attacker", target="vault",
+                                function="deposit()", value_eth=deposit),
+                TransactionStep(step_id=2, caller="attacker", target="attacker",
+                                function="attack()"),
+            ],
+            success_conditions=[
+                SuccessCondition(
+                    expression="attacker.eth_balance_after > attacker.legitimate_entitlement",
+                    description="attacker ended with more ETH than their starting entitlement",
+                ),
+            ],
+        )
+
+    def test_safe_round_trip_at_0_9_is_not_theft(self):
+        scenario = self._scenario("SafeVault", 0.9, 0.3)
+        result = MockExecutor(
+            contract_kinds={"vault": "SafeVault", "attacker": "ReentrantAttacker"},
+        ).execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertEqual(result.state_vars["attacker"]["eth_balance_after"], 0.9)
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 0.9)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+    def test_positive_theft_still_verifies_with_override(self):
+        scenario = self._scenario("VulnerableVault", 0.9, 0.3)
+        result = MockExecutor(
+            contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"},
+        ).execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertGreater(result.state_vars["attacker"]["eth_balance_after"], 0.9)
+        verdict = Verifier().verify(scenario, result)
+        self.assertTrue(verdict.verified)
+        self.assertEqual(verdict.verdict, "verified")
+
+    def test_tiny_real_gain_below_12_decimals_verifies(self):
+        """CodeRabbit follow-up on PR #29 (Fix 7d): rounding to 12 decimal
+        places would erase a real sub-1e-12 gain — funding and deposit of
+        1e-13 ETH, three reentries, ending near 4e-13 ETH must still verify.
+        The rounding must kill float residue (relative error) without
+        destroying significant digits."""
+        scenario = AttackScenario(
+            vulnerability_class="reentrancy",
+            target_protocol="TestVault",
+            hypothesis="withdraw reenters",
+            attacker=AttackerModel(initial_eth=1e-13),
+            initial_state=InitialState(
+                fork_url="https://example/rpc", fork_block=1,
+                target_contracts={"vault": "0xabc"},
+                balances={"vault": 9.0},
+            ),
+            steps=[
+                TransactionStep(step_id=1, caller="attacker", target="vault",
+                                function="deposit()", value_eth=1e-13),
+                TransactionStep(step_id=2, caller="attacker", target="attacker",
+                                function="attack()"),
+            ],
+            success_conditions=[
+                SuccessCondition(
+                    expression="attacker.eth_balance_after > attacker.legitimate_entitlement",
+                    description="attacker ended with more ETH than their starting entitlement",
+                ),
+            ],
+        )
+        result = MockExecutor(
+            contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"},
+        ).execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertGreater(result.state_vars["attacker"]["eth_balance_after"],
+                           result.state_vars["attacker"]["legitimate_entitlement"])
+        verdict = Verifier().verify(scenario, result)
+        self.assertTrue(verdict.verified)
+        self.assertEqual(verdict.verdict, "verified")
 
 
 class TestOracleManipulationLive(unittest.TestCase):
