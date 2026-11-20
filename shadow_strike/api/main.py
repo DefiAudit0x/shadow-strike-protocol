@@ -14,6 +14,8 @@ beyond the stdlib + jinja2 + pyyaml).
 
 from __future__ import annotations
 
+from typing import Literal
+
 try:
     from fastapi import FastAPI, WebSocket
     from pydantic import BaseModel
@@ -24,6 +26,7 @@ except ImportError as e:
     ) from e
 
 from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
+from shadow_strike.agent.llm_providers import build_llm_fn
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.benchmark.runner import run_benchmark
 from shadow_strike.execution.mock_executor import MockExecutor
@@ -45,6 +48,10 @@ class RunRequest(BaseModel):
     attacker_initial_eth: float = 1.0
     engine: str = "mock"   # "mock" | "foundry"
     max_retries: int = 3
+    # Part 10: LLM provider for hypothesis generation ("echo" is the
+    # offline test double; "anthropic" reads its key from the server env).
+    # None means heuristics only.
+    llm: Literal["anthropic", "echo"] | None = None
 
 
 @app.get("/attack-library")
@@ -67,7 +74,10 @@ def create_run(req: RunRequest):
         kinds = {next(iter(req.target_contracts)): "VulnerableVault", "attacker": "ReentrantAttacker"}
         executor = MockExecutor(contract_kinds=kinds)
 
-    graph = SimpleShadowStrikeGraph(executor=executor, verifier=Verifier(), library=library, max_retries=req.max_retries)
+    graph = SimpleShadowStrikeGraph(
+        executor=executor, verifier=Verifier(), library=library, max_retries=req.max_retries,
+        llm_fn=build_llm_fn(req.llm),
+    )
     result = graph.run(
         target_contract_source=req.source_code,
         target_protocol_name=req.protocol_name,
