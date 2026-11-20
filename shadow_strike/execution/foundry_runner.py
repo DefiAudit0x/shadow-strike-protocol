@@ -17,6 +17,7 @@ import json
 import re
 import shutil
 import subprocess
+from decimal import Decimal
 from pathlib import Path
 
 from shadow_strike.core.models import AttackScenario, ExecutionResult
@@ -85,7 +86,6 @@ class ForgeRunner:
                 state_vars={},
                 state_diff={},
                 call_trace=[],
-                gas_used=0,
                 engine="foundry",
             )
 
@@ -110,6 +110,10 @@ class ForgeRunner:
             for test_result in _walk_test_results(payload):
                 for line in test_result.get("decoded_logs", []) or []:
                     logs.append(line)
+                    state_match = re.fullmatch(r"ss\.(\w+)\.(\w+):\s*(0x[0-9a-fA-F]{40}|[0-9]+)", line.strip())
+                    if state_match:
+                        alias, field, value = state_match.groups()
+                        state_vars[f"ss.{alias}.{field}"] = value if value.startswith("0x") else int(value)
                     m = re.match(r"^(\w+):\s*([0-9]+)$", line.strip())
                     if m:
                         key, value = m.group(1), int(m.group(2))
@@ -118,6 +122,13 @@ class ForgeRunner:
                     revert_reason = test_result.get("reason") or "assertion failed"
 
         state_vars = _nest_eth_vars(state_vars)
+        attacker_address = state_vars.get("attacker", {}).pop("address", None)
+        for fields in state_vars.values():
+            if isinstance(fields, dict):
+                for field in ("owner", "last_caller"):
+                    if isinstance(fields.get(field), str):
+                        address = fields[field].lower()
+                        fields[field] = "attacker" if attacker_address and address == attacker_address.lower() else address
         state_diff = _extract_state_diff(logs)
 
         return ExecutionResult(
@@ -127,7 +138,6 @@ class ForgeRunner:
             state_vars=state_vars,
             state_diff=state_diff,
             call_trace=[{"raw_stderr_tail": proc.stderr[-2000:]}] if proc.stderr else [],
-            gas_used=state_vars.get("gas_used", 0) if isinstance(state_vars.get("gas_used"), int) else 0,
             raw_logs=logs,
             engine="foundry",
         )
@@ -161,16 +171,22 @@ def _extract_state_diff(logs: list[str]) -> dict:
     return diff
 
 
-def _nest_eth_vars(flat: dict[str, int]) -> dict:
-    """Turn {'attacker_eth_before': 1, 'attacker_eth_after': 11, 'vault_eth_before': ...}
-    into {'attacker': {'eth_balance_before': 1, 'eth_balance_after': 11}, 'vault': {...}}
-    so it matches the dotted-name convention success_conditions expect."""
+def _nest_eth_vars(flat: dict) -> dict:
+    """Nest balance/state logs and convert native wei to mock-compatible ETH.
+
+    Counts and shares stay in getter units. See STATE_PROTOCOL.md.
+    """
     nested: dict[str, dict] = {}
     for key, value in flat.items():
         m = re.match(r"^(\w+)_eth_(before|after)$", key)
         if m:
             alias, when = m.group(1), m.group(2)
-            nested.setdefault(alias, {})[f"eth_balance_{when}"] = value
+            nested.setdefault(alias, {})[f"eth_balance_{when}"] = float(Decimal(value) / Decimal(10**18))
+        elif key.startswith("ss."):
+            _, alias, field = key.split(".")
+            if field == "legitimate_entitlement":
+                value = float(Decimal(value) / Decimal(10**18))
+            nested.setdefault(alias, {})[field] = value
         else:
             nested[key] = value
     return nested
