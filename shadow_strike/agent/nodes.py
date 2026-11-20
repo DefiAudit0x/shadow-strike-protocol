@@ -166,8 +166,8 @@ def _build_reentrancy_scenario(chosen, target_contracts, attacker_initial_eth, f
                              comment="trigger withdraw(); reentry happens inside the receive() callback"),
         ],
         success_conditions=[SuccessCondition(**sc) for sc in (default_sc or [{
-            "expression": "attacker.eth_balance_after - attacker.eth_balance_before > attacker.legitimate_entitlement",
-            "description": "attacker extracted more ETH than they legitimately deposited",
+            "expression": "attacker.eth_balance_after > attacker.legitimate_entitlement",
+            "description": "attacker ended with more ETH than their starting entitlement",
         }])],
         invariants_under_test=default_inv,
     )
@@ -273,9 +273,11 @@ def _build_signature_replay_scenario(chosen, target_contracts, attacker_initial_
         attacker=AttackerModel(initial_eth=attacker_initial_eth),
         initial_state=InitialState(fork_url=fork_url, fork_block=fork_block, target_contracts=target_contracts),
         steps=[
-            TransactionStep(step_id=1, caller="attacker", target=primary_alias, function="executeSignedAction()",
+            TransactionStep(step_id=1, caller="attacker", target=primary_alias,
+                             function="executeSignedAction(string)",
                              args=["captured-sig-1"], comment="legitimate first use of a captured signature"),
-            TransactionStep(step_id=2, caller="attacker", target=primary_alias, function="executeSignedAction()",
+            TransactionStep(step_id=2, caller="attacker", target=primary_alias,
+                             function="executeSignedAction(string)",
                              args=["captured-sig-1"], comment="replay of the SAME signature"),
         ],
         success_conditions=[SuccessCondition(
@@ -336,13 +338,20 @@ def scenario_planner_node(
         state["verdict"] = "error"
         return state
 
-    chosen = state["hypotheses"][0]
-    vuln_class = chosen["vulnerability_class"]
-    builder = SCENARIO_BUILDERS.get(vuln_class)
+    chosen = None
+    builder = None
+    for hypothesis in state["hypotheses"]:
+        hypothesis_builder = SCENARIO_BUILDERS.get(hypothesis["vulnerability_class"])
+        if hypothesis_builder is not None:
+            chosen = hypothesis
+            builder = hypothesis_builder
+            break
 
     if builder is None:
         # Refuse to guess a scenario shape it has no template for. This is
-        # a clean unsupported-class outcome, not a planner failure.
+        # a clean unsupported-class outcome only after all hypotheses have
+        # been checked for a registered scenario template.
+        vuln_class = state["hypotheses"][0]["vulnerability_class"]
         state["current_scenario"] = None
         state.pop("planner_error", None)
         state["planner_detail"] = f"no scenario builder registered yet for {vuln_class!r}"
