@@ -30,16 +30,10 @@ from dataclasses import dataclass, field
 from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_node
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.benchmark.runner import BenchmarkReport, run_benchmark
+from shadow_strike.core.severity import SEVERITY_BY_CLASS
 from shadow_strike.execution.foundry_runner import execute_scenario
 from shadow_strike.storage.persistence import run_store, save_run
 from shadow_strike.verifier.verifier import Verifier
-
-SEVERITY_BY_CLASS = {
-    "reentrancy": "critical", "oracle_manipulation": "critical", "flash_loan": "critical",
-    "price_manipulation": "critical", "access_control": "high", "signature_replay": "high",
-    "initialization": "high", "upgradeability": "high", "accounting": "medium",
-    "cross_contract": "medium", "economic": "medium",
-}
 
 
 @dataclass
