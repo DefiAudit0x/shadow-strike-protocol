@@ -332,27 +332,24 @@ class OracleFedLendingMarket:
     def __init__(self, alias: str, pool: SimplePool, reserve_eth: float = 0.0):
         self.alias = alias
         self.pool = pool
-        self.reserve_eth = reserve_eth
+        self.initial_reserve_eth = reserve_eth
         self.collateral: dict[str, float] = {}
+        self.debt: dict[str, float] = {}
 
     def depositCollateral(self, caller: str, world: MockWorld, msg_value: float = 0.0):
-        self.collateral[caller] = self.collateral.get(caller, 0.0) + msg_value
         world.ledger.transfer(caller, self.alias, msg_value, world)
+        self.collateral[caller] = self.collateral.get(caller, 0.0) + msg_value
         world.log(contract=self.alias, fn="depositCollateral", caller=caller, amount=msg_value)
 
     def borrowAgainstCollateral(self, caller: str, world: MockWorld, msg_value: float = 0.0):
-        # borrows up to (collateral_in_tokenA * current spot price) worth of ETH —
-        # the manipulated spot price directly inflates what the attacker can borrow
+        # The manipulated spot price directly inflates borrowing capacity.
         collateral_value = self.collateral.get(caller, 0.0) * self.pool.spot_price()
-        borrowable = min(collateral_value, self.reserve_eth)
+        debt = self.debt.get(caller, 0.0)
+        borrowable = min(collateral_value - debt, world.ledger.get(self.alias))
         if borrowable <= 0:
             raise MockRevert("nothing borrowable")
-        self.reserve_eth -= borrowable
-        world.ledger.balances[self.alias] = self.reserve_eth
-        world.ledger.balances[caller] = world.ledger.balances.get(caller, 0.0) + borrowable
-        callee = world.contracts.get(caller)
-        if callee is not None and hasattr(callee, "on_receive"):
-            callee.on_receive(borrowable, world)
+        self.debt[caller] = debt + borrowable
+        world.ledger.transfer(self.alias, caller, borrowable, world)
         world.log(contract=self.alias, fn="borrowAgainstCollateral", caller=caller, borrowed=borrowable)
 
 
@@ -426,24 +423,24 @@ class ERC4626LikeVault:
     unless donation_resistant=True (simulating e.g. OpenZeppelin's virtual
     shares/decimals-offset mitigation)."""
 
+    # The demo's smallest asset unit is its 1e-9 ETH seed deposit.
+    ASSET_UNITS_PER_ETH = 10 ** 9
+
     def __init__(self, alias: str, donation_resistant: bool = False):
         self.alias = alias
-        self.donation_resistant = donation_resistant
-        self.total_assets = 0.0
-        self.total_shares = 0.0
-        self.shares_of: dict[str, float] = {}
-        # the offset a donation-resistant implementation effectively adds
-        # to totalShares before computing the ratio — defeats the "shares
-        # round to zero" attack by making the attacker's donation move the
-        # ratio far less than it would against a zero/near-zero base.
-        self._virtual_offset = 1_000_000.0 if donation_resistant else 0.0
+        self._asset_units = 0
+        self.total_shares = 0
+        self.shares_of: dict[str, int] = {}
+        self._virtual_shares = 1_000_000_000 if donation_resistant else 0
+        self._virtual_assets = 1 if donation_resistant else 0
 
     def deposit(self, caller: str, world: MockWorld, msg_value: float = 0.0):
-        shares = self._convert_to_shares(msg_value)
+        assets = round(msg_value * self.ASSET_UNITS_PER_ETH)
+        shares = self._convert_to_shares(assets)
         world.ledger.transfer(caller, self.alias, msg_value, world)
-        self.total_assets += msg_value
+        self._asset_units += assets
         self.total_shares += shares
-        self.shares_of[caller] = self.shares_of.get(caller, 0.0) + shares
+        self.shares_of[caller] = self.shares_of.get(caller, 0) + shares
         world.log(contract=self.alias, fn="deposit", caller=caller, amount=msg_value, shares=shares)
 
     def donate(self, caller: str, world: MockWorld, msg_value: float = 0.0):
@@ -452,21 +449,28 @@ class ERC4626LikeVault:
         function, this models sending the underlying asset straight to the
         vault's balance, bypassing deposit() accounting entirely."""
         world.ledger.transfer(caller, self.alias, msg_value, world)
-        self.total_assets += msg_value
+        self._asset_units += round(msg_value * self.ASSET_UNITS_PER_ETH)
         world.log(contract=self.alias, fn="donate", caller=caller, amount=msg_value)
 
-    def _convert_to_shares(self, assets: float) -> float:
-        effective_shares_base = self.total_shares + self._virtual_offset
-        effective_assets_base = self.total_assets + (1.0 if self.donation_resistant else 0.0)
-        if effective_shares_base == 0 or self.total_shares == 0:
-            return assets  # first depositor, 1:1
-        return assets * effective_shares_base / effective_assets_base
+    def _convert_to_shares(self, assets: int) -> int:
+        effective_assets = self._asset_units + self._virtual_assets
+        effective_shares = self.total_shares + self._virtual_shares
+        if effective_assets == 0:
+            return assets  # Empty vault without virtual units starts at 1:1.
+        return assets * effective_shares // effective_assets
 
     def state_vars(self) -> dict:
+        victim_shares = self.shares_of.get("victim", 0)
+        effective_shares = self.total_shares + self._virtual_shares
+        claim_units = (
+            victim_shares * (self._asset_units + self._virtual_assets) // effective_shares
+            if effective_shares else 0
+        )
         return {
-            "total_assets": self.total_assets,
+            "total_assets": self._asset_units / self.ASSET_UNITS_PER_ETH,
             "total_shares": self.total_shares,
-            "victim_shares": self.shares_of.get("victim", 0.0),
+            "victim_shares": victim_shares,
+            "victim_claim_eth": claim_units / self.ASSET_UNITS_PER_ETH,
         }
 
 
@@ -507,19 +511,24 @@ class UncheckedBalanceToken:
         self.checked = checked
         self.balances: dict[str, int] = {}
 
+    def _validate_amount(self, amount: int) -> None:
+        if type(amount) is not int or not 0 <= amount < self.UINT256_MOD:
+            raise MockRevert("token amount must be a uint256")
+
     def mint(self, caller: str, world: MockWorld, msg_value: float = 0.0, to: str = "", amount: int = 0):
         to = to or caller
-        self.balances[to] = self.balances.get(to, 0) + int(amount)
+        self._validate_amount(amount)
+        self.balances[to] = (self.balances.get(to, 0) + amount) % self.UINT256_MOD
         world.log(contract=self.alias, fn="mint", caller=caller, to=to, amount=amount)
 
     def transfer(self, caller: str, world: MockWorld, msg_value: float = 0.0, to: str = "", amount: int = 0):
-        amount = int(amount)
+        self._validate_amount(amount)
         bal = self.balances.get(caller, 0)
         if self.checked and bal < amount:
             raise MockRevert(f"transfer amount {amount} exceeds balance {bal}")
         new_bal = (bal - amount) % self.UINT256_MOD   # wraps on underflow, exactly like unchecked uint256
         self.balances[caller] = new_bal
-        self.balances[to] = self.balances.get(to, 0) + amount
+        self.balances[to] = (self.balances.get(to, 0) + amount) % self.UINT256_MOD
         world.log(contract=self.alias, fn="transfer", caller=caller, to=to, amount=amount, resulting_balance=new_bal)
 
     def state_vars(self) -> dict:
@@ -646,8 +655,8 @@ class SelfLiquidationMarket:
 
     def openPosition(self, caller: str, world: MockWorld, msg_value: float = 0.0,
                       collateral_amt: float = 0.0, debt_amt: float = 0.0):
-        self.collateral[caller] = collateral_amt
-        self.debt[caller] = debt_amt
+        self.collateral[caller] = self.collateral.get(caller, 0.0) + collateral_amt
+        self.debt[caller] = self.debt.get(caller, 0.0) + debt_amt
         world.ledger.transfer(caller, self.alias, collateral_amt, world)
         world.ledger.transfer(self.alias, caller, debt_amt, world)
         world.log(contract=self.alias, fn="openPosition", caller=caller, collateral=collateral_amt, debt=debt_amt)
@@ -807,6 +816,8 @@ class MockExecutor:
             if isinstance(contract, SimplePool):
                 ledger.balances.setdefault(alias, contract.reserve_a)
                 world.token_b_ledger.balances[alias] = contract.reserve_b
+            elif isinstance(contract, OracleFedLendingMarket):
+                ledger.balances.setdefault(alias, contract.initial_reserve_eth)
 
         def balances():
             return {a: world.ledger.get(a) for a in list(world.contracts) + ["attacker"]}
