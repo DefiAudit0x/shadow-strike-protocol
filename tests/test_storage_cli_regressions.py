@@ -202,3 +202,35 @@ def test_retry_history_persists_every_attempt(tmp_path):
     assert len(rows) == 4
     assert sorted(row["attempt_number"] for row in rows) == [1, 2, 3, 4]
     assert {row["status"] for row in rows} == {"failure"}
+
+
+def _ordered_scenario():
+    """A scenario whose target_contracts define vault as the primary
+    target (first key) — CodeRabbit (PR #32): sort_keys=True reordered
+    them on disk, flipping the primary target."""
+    return SimpleNamespace(
+        scenario_id="ordered",
+        target_protocol="Example",
+        vulnerability_class=SimpleNamespace(value="reentrancy"),
+        to_json=lambda **kwargs: json.dumps(
+            {"initial_state": {"target_contracts": {"vault": "0x1", "aux": "0x2"}}}, **kwargs),
+    )
+
+
+def test_stored_scenario_preserves_target_order(store):
+    store.save_scenario(_ordered_scenario())
+    stored = json.loads(store.get_scenario("ordered")["scenario_json"])
+    assert list(stored["initial_state"]["target_contracts"]) == ["vault", "aux"]
+
+
+def test_postgres_stored_scenario_preserves_target_order():
+    pytest.importorskip("sqlalchemy")
+    from shadow_strike.storage.postgres_store import PostgresKnowledgeStore
+
+    store = PostgresKnowledgeStore("sqlite://")
+    try:
+        store.save_scenario(_ordered_scenario())
+        stored = json.loads(store.get_scenario("ordered")["scenario_json"])
+        assert list(stored["initial_state"]["target_contracts"]) == ["vault", "aux"]
+    finally:
+        store.close()
