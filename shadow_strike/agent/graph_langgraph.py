@@ -57,7 +57,7 @@ def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries:
 
     graph = StateGraph(ShadowStrikeState)
 
-    graph.add_node("recon", lambda s: recon_node(s, llm_fn=llm_fn))
+    graph.add_node("recon", recon_node)
     graph.add_node("hypothesis", lambda s: hypothesis_node(s, llm_fn=llm_fn, library=library))
     graph.add_node("scenario_planner", lambda s: scenario_planner_node(
         s, fork_url=fork_url, fork_block=fork_block, target_contracts=target_contracts,

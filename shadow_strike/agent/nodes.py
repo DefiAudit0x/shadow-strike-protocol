@@ -38,7 +38,7 @@ LLMFn = Callable[[str], str]   # prompt -> completion; plug in a real model clie
 # ---------------------------------------------------------------------
 # 1. recon
 # ---------------------------------------------------------------------
-def recon_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
+def recon_node(state: dict) -> dict:
     source = state["target_contract_source"]
     functions = re.findall(r"function\s+(\w+)\s*\(([^)]*)\)", source)
     sensitive_calls = []
@@ -58,6 +58,28 @@ def recon_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
 # ---------------------------------------------------------------------
 # 2. hypothesis generation
 # ---------------------------------------------------------------------
+def _parse_llm_hypothesis_line(line: str, library: AttackLibrary) -> dict | None:
+    """Parse one LLM output line of the form '<class>: <text>' into a
+    hypothesis dict (Part 10). The class must be one the attack library
+    knows, and the text must be non-empty; anything else returns None so
+    free-form LLM prose never becomes a hypothesis the planner must act on."""
+    text = line.strip()
+    if not text:
+        return None
+    for vc in library.available_classes():
+        marker = f"{vc}:"
+        idx = text.find(marker)
+        if idx != -1:
+            hypothesis = text[idx + len(marker):].strip()
+            if hypothesis:
+                return {
+                    "vulnerability_class": vc,
+                    "hypothesis": hypothesis,
+                    "confidence_note": "LLM-proposed — NOT a verdict, see architecture §0 principle #2",
+                }
+    return None
+
+
 def hypothesis_node(state: dict, llm_fn: LLMFn | None = None, library: AttackLibrary | None = None) -> dict:
     library = library or AttackLibrary()
     source = state["target_contract_source"]
@@ -77,12 +99,28 @@ def hypothesis_node(state: dict, llm_fn: LLMFn | None = None, library: AttackLib
 
     # a plugged-in LLM can refine/add to this list; heuristic hits are
     # always kept too, since the LLM augments, never replaces, recon.
+    # The prompt specifies the '<class>: <text>' line format the parser
+    # below expects, so a provider's free-form output stays parseable.
     if llm_fn is not None:
-        llm_notes = llm_fn(
-            f"Given this recon summary: {state['recon_notes']}\n"
-            f"Suggest additional vulnerability hypotheses as plain text, one per line."
-        )
+        try:
+            llm_notes = llm_fn(
+                f"Given this recon summary: {state['recon_notes']}\n"
+                "Suggest additional vulnerability hypotheses, one per line, each as "
+                "'<vulnerability_class>: <one-sentence hypothesis>'. "
+                "Example: reentrancy: withdraw() sends ETH before updating the balance."
+            )
+        except Exception:  # noqa: BLE001 — any provider failure degrades to heuristics, not a crash
+            # A provider that fails mid-run degrades to heuristics instead
+            # of crashing the run (Part 10).
+            llm_notes = None
         state["_llm_hypothesis_notes"] = llm_notes
+        if llm_notes:
+            seen = {(h["vulnerability_class"], h["hypothesis"]) for h in hypotheses}
+            for line in llm_notes.splitlines():
+                parsed = _parse_llm_hypothesis_line(line, library)
+                if parsed is not None and (parsed["vulnerability_class"], parsed["hypothesis"]) not in seen:
+                    seen.add((parsed["vulnerability_class"], parsed["hypothesis"]))
+                    hypotheses.append(parsed)
 
     state["hypotheses"] = hypotheses
     return state
@@ -422,9 +460,14 @@ def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     state["_critic_adjustment"] = adjustment
 
     if llm_fn is not None:
-        state["_llm_critic_notes"] = llm_fn(
-            f"Attempt {state['attempt_count']} failed: {reason}. "
-            f"Trace: {execution_result.call_trace if execution_result else 'n/a'}. "
-            f"Suggest one concrete scenario adjustment."
-        )
+        try:
+            state["_llm_critic_notes"] = llm_fn(
+                f"Attempt {state['attempt_count']} failed: {reason}. "
+                f"Trace: {execution_result.call_trace if execution_result else 'n/a'}. "
+                f"Suggest one concrete scenario adjustment."
+            )
+        except Exception:  # noqa: BLE001 — any provider failure degrades, not a crash
+            # A provider that fails mid-run degrades instead of crashing
+            # the run (Part 10); the rule-based adjustment above stands.
+            state["_llm_critic_notes"] = "LLM unavailable; degraded to the rule-based adjustment."
     return state

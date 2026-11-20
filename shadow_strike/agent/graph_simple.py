@@ -54,7 +54,7 @@ class SimpleShadowStrikeGraph:
             if on_step:
                 on_step(label, state)
 
-        state = recon_node(state, llm_fn=self.llm_fn)
+        state = recon_node(state)
         emit("recon")
 
         state = hypothesis_node(state, llm_fn=self.llm_fn, library=self.library)
