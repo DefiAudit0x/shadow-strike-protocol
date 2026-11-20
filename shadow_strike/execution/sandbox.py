@@ -8,7 +8,10 @@ Docker container is manual-only and does not enforce an egress allowlist.
 
 from __future__ import annotations
 
+import os
 import resource
+import selectors
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -25,6 +28,7 @@ class SandboxLimits:
     memory_bytes: int = 1536 * 1024 * 1024
     max_file_size_bytes: int = 50 * 1024 * 1024  # 50 MB — generated .t.sol / build artifacts
     wall_clock_seconds: int = 30              # backstop in case a process ignores SIGXCPU
+    max_output_bytes: int = 4096  # per stream, including truncation marker
 
 
 def _apply_rlimits(limits: SandboxLimits):
@@ -48,31 +52,83 @@ class SandboxedSubprocess:
 
     def run(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
         start = time.monotonic()
-        try:
-            proc = subprocess.run(
-                cmd,
-                preexec_fn=lambda: _apply_rlimits(self.limits),
-                timeout=self.limits.wall_clock_seconds,
-                capture_output=True,
-                text=True,
-                check=False,
-                **kw,
+        child_usage = None
+        marker = b"\n[output truncated]\n"
+        cap = self.limits.max_output_bytes
+        if cap < len(marker):
+            raise ValueError("max_output_bytes must fit the truncation marker")
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        truncated = set()
+        with subprocess.Popen(
+            cmd,
+            preexec_fn=lambda: _apply_rlimits(self.limits),  # noqa: PLW1509 -- set limits before exec
+            start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw,
+        ) as child:
+            try:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(child.stdout, selectors.EVENT_READ, "stdout")
+                    selector.register(child.stderr, selectors.EVENT_READ, "stderr")
+                    while True:
+                        if not selector.get_map():
+                            pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+                            if pid:
+                                # Record the status before Popen's context manager calls wait().
+                                child.returncode = os.waitstatus_to_exitcode(status)
+                                child_usage = usage
+                                break
+                        remaining = self.limits.wall_clock_seconds - (time.monotonic() - start)
+                        if remaining <= 0:
+                            raise SandboxLimitExceeded(
+                                f"wall-clock limit ({self.limits.wall_clock_seconds}s) exceeded"
+                            )
+                        for key, _ in selector.select(min(remaining, 0.1)):
+                            chunk = os.read(key.fileobj.fileno(), 65536)
+                            if not chunk:
+                                selector.unregister(key.fileobj)
+                                continue
+                            name = key.data
+                            buffer = buffers[name]
+                            available = cap - len(buffer)
+                            buffer.extend(chunk[:available])
+                            if len(chunk) > available:
+                                truncated.add(name)
+            finally:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                if child.returncode is None:
+                    child.wait()
+            outputs = {}
+            for name, buffer in buffers.items():
+                decoded = buffer.decode(errors="replace")
+                encoded = decoded.encode("utf-8")
+                if name in truncated or len(encoded) > cap:
+                    # Ignore only a partial final character when cutting UTF-8.
+                    decoded = encoded[:cap - len(marker)].decode("utf-8", errors="ignore")
+                    decoded += marker.decode("ascii")
+                outputs[name] = decoded
+            proc = subprocess.CompletedProcess(
+                cmd, child.returncode,
+                outputs["stdout"], outputs["stderr"],
             )
-        except subprocess.TimeoutExpired as e:
-            raise SandboxLimitExceeded(
-                f"wall-clock limit ({self.limits.wall_clock_seconds}s) exceeded — "
-                f"process did not respect its CPU rlimit in time"
-            ) from e
 
         elapsed = time.monotonic() - start
         # RLIMIT_CPU delivers SIGXCPU (signal 24); a killed process shows
         # up as a negative returncode equal to -signal on POSIX.
-        if proc.returncode == -24:
+        if proc.returncode == -signal.SIGXCPU:
             raise SandboxLimitExceeded(
                 f"CPU limit ({self.limits.cpu_seconds}s) exceeded after {elapsed:.1f}s wall time"
             )
-        if proc.returncode == -9:
-            raise SandboxLimitExceeded(f"process was killed (likely OOM against {self.limits.memory_bytes} byte limit)")
+        if proc.returncode == -signal.SIGKILL:
+            # Linux kills at the hard CPU limit, allowing for accounting granularity.
+            if child_usage is not None and (
+                child_usage.ru_utime + child_usage.ru_stime >= self.limits.cpu_seconds - 0.05
+            ):
+                raise SandboxLimitExceeded(
+                    f"CPU limit ({self.limits.cpu_seconds}s) exceeded after {elapsed:.1f}s wall time"
+                )
+            raise SandboxLimitExceeded("process was killed by SIGKILL; cause unknown")
         return proc
 
 

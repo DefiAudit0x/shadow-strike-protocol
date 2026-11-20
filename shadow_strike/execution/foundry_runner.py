@@ -38,6 +38,9 @@ class ForgeRunner:
         # These host resource limits do not restrict filesystem or network access.
         self.sandbox = SandboxedSubprocess(sandbox_limits or SandboxLimits(
             cpu_seconds=timeout_seconds, wall_clock_seconds=timeout_seconds + 10,
+            # The sandbox defaults to 4096 bytes per stream.
+            # Give Forge 1 MiB per stream to avoid truncating its JSON output.
+            max_output_bytes=1024 * 1024,
         ))
         if shutil.which("forge") is None:
             raise FoundryNotInstalledError(
@@ -64,11 +67,12 @@ class ForgeRunner:
             "forge", "test",
             "--match-contract", contract_name,
             "--match-path", test_path.as_posix(),
-            "--fork-url", scenario.initial_state.fork_url,
-            "--fork-block-number", str(scenario.initial_state.fork_block),
             "-vvvv",
             "--json",
         ]
+        if scenario.initial_state.fork_url:
+            cmd.extend(["--fork-url", scenario.initial_state.fork_url,
+                        "--fork-block-number", str(scenario.initial_state.fork_block)])
         try:
             proc = self.sandbox.run(cmd, cwd=self.root)
         except SandboxLimitExceeded as e:
@@ -86,6 +90,14 @@ class ForgeRunner:
 
     # ------------------------------------------------------------------
     def _parse_result(self, scenario: AttackScenario, proc: subprocess.CompletedProcess) -> ExecutionResult:
+        if "\n[output truncated]\n" in proc.stdout:
+            return ExecutionResult(
+                scenario_id=scenario.scenario_id,
+                reverted=True,
+                revert_reason="forge output exceeded the sandbox output limit "
+                              f"({self.sandbox.limits.max_output_bytes} bytes)",
+                state_vars={}, state_diff={}, call_trace=[], engine="foundry",
+            )
         state_vars: dict = {}
         logs: list[str] = []
         reverted = proc.returncode != 0
@@ -111,7 +123,8 @@ class ForgeRunner:
                     if m:
                         key, value = m.group(1), int(m.group(2))
                         state_vars[key] = value
-                if test_result.get("success") is False:
+                if test_result.get("success") is False or test_result.get("status") == "Failure":
+                    reverted = True
                     revert_reason = test_result.get("reason") or "assertion failed"
 
         state_vars = _nest_eth_vars(state_vars)
@@ -149,12 +162,10 @@ def _extract_state_diff(logs: list[str]) -> dict:
     forge-std vm.record()/vm.accesses() cheatcodes — not simulated) into
     {alias: {"slots_written": N, "written_slots": [hex, ...]}}."""
     diff: dict[str, dict] = {}
-    current_alias = None
     for line in logs:
         m = re.match(r"^(\w+)_slots_written:\s*(\d+)$", line.strip())
         if m:
-            current_alias = m.group(1)
-            diff.setdefault(current_alias, {"slots_written": int(m.group(2)), "written_slots": []})
+            diff.setdefault(m.group(1), {"slots_written": int(m.group(2)), "written_slots": []})
             continue
         m2 = re.match(r"^(\w+)_written_slot:\s*(0x[0-9a-fA-F]+)$", line.strip())
         if m2:
