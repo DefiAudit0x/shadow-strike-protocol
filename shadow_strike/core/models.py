@@ -10,10 +10,8 @@ smaller supply-chain surface, and it means this reference
 implementation runs anywhere Python 3.10+ runs, with no `pip install`
 required).
 
-A drop-in Pydantic v2 version (`shadow_strike.core.pydantic_models`)
-is provided separately for teams that want JSON-schema export / FastAPI
-integration — same field names, same semantics, so scenarios produced
-by one are readable by the other.
+The optional API defines its own request models; the dataclasses here
+remain the canonical scenario schema.
 """
 
 from __future__ import annotations
@@ -163,6 +161,8 @@ class AttackScenario:
     @classmethod
     def from_dict(cls, d: dict) -> AttackScenario:
         d = dict(d)
+        if "attacker" not in d:
+            raise ShadowStrikeValidationError("missing required field: attacker")
         d["attacker"] = AttackerModel(**d["attacker"])
         init_state = dict(d["initial_state"])
         init_state["custom_setup_calls"] = [
