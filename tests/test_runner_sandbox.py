@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from inspect import getsource
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -91,6 +92,32 @@ def test_captured_streams_are_bounded():
 
 def test_default_output_budget():
     assert SandboxLimits().max_output_bytes == 4096
+
+
+def test_sigkill_ignores_cpu_from_other_child():
+    popen = subprocess.Popen
+    sandbox = SandboxedSubprocess(SandboxLimits(cpu_seconds=1, wall_clock_seconds=10))
+    with popen([
+        sys.executable, "-c", "import time\nwhile time.process_time() < 2: pass",
+    ]) as burner:
+        def reap_burner_then_launch(*args, **kwargs):
+            # Reap inside sandbox.run so aggregate accounting would charge this CPU time to the sandbox.
+            assert burner.wait(timeout=10) == 0
+            return popen(*args, **kwargs)
+
+        with (
+            patch("subprocess.Popen", side_effect=reap_burner_then_launch),
+            pytest.raises(SandboxLimitExceeded, match="SIGKILL; cause unknown") as failure,
+        ):
+            sandbox.run([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"])
+
+    assert "CPU" not in str(failure.value)
+
+
+def test_forge_budget_comment_documents_default_and_override():
+    source = getsource(ForgeRunner.__init__)
+    assert "# The sandbox defaults to 4096 bytes per stream." in source
+    assert "# Give Forge 1 MiB per stream to avoid truncating its JSON output." in source
 
 
 def test_forge_explicit_output_budget(tmp_path):
