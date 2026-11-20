@@ -81,6 +81,9 @@
     <label>Attacker initial ETH</label>
     <input id="attackerEth" type="number" value="1.0" step="0.1">
 
+    <label>API bearer token</label>
+    <input id="apiToken" type="password" autocomplete="off" placeholder="SHADOW_STRIKE_API_TOKEN">
+
     <button id="runBtn">تشغيل الـ pipeline</button>
 
     <ul class="steps" id="stepsList"></ul>
@@ -121,6 +124,26 @@ async function loadLibrary() {
   }
 }
 
+function authHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${document.getElementById("apiToken").value}`,
+  };
+}
+
+async function pollJob(jobId) {
+  while (true) {
+    const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}`, {
+      headers: authHeaders(),
+    });
+    const job = await res.json();
+    if (!res.ok) throw new Error(job.detail || `Job poll failed (${res.status})`);
+    if (job.status === "complete") return job.result;
+    if (job.status === "failed") throw new Error(job.error || "Job failed");
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
 function parseTargets(text) {
   const out = {};
   text.split("\n").map(l => l.trim()).filter(Boolean).forEach(line => {
@@ -149,10 +172,12 @@ async function runScenario() {
   try {
     const res = await fetch(`${API_BASE}/runs`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
       body: JSON.stringify(body),
     });
-    const data = await res.json();
+    const response = await res.json();
+    if (!res.ok) throw new Error(response.detail || `Request failed (${res.status})`);
+    const data = await pollJob(response.job_id);
     badge.innerHTML = data.verified
       ? `<span class="badge badge-ok">ATTACK VERIFIED ✔</span>`
       : `<span class="badge badge-fail">NOT VERIFIED — ${data.stopped_reason}</span>`;
