@@ -202,7 +202,15 @@ class ScenarioCompiler:
                         methods.add(f"function {name}({params}) external payable;")
                 interfaces.append(f"interface {sol_type} {{ " + " ".join(sorted(methods)) + " }")
             contract_decls.append(f"{sol_type} {alias};")
-            setup_lines.append(f"{alias} = {sol_type}({_argument(address, 'address')});")
+            if address.lower() == "0x" + "1" * 40 and sol_type == "IVault":
+                # K02: the placeholder address is undeployed — bind a
+                # real local Vault instead. The scenario's balances seed
+                # its reserve (the vm.deal loop below), so a generated
+                # test executes end-to-end against a real contract.
+                import_lines.append('import {Vault} from "../../src/Vault.sol";')
+                setup_lines.append(f"{alias} = {sol_type}(address(new Vault()));")
+            else:
+                setup_lines.append(f"{alias} = {sol_type}({_argument(address, 'address')});")
 
         bounded_receiver = attacker_contract_name == "MaliciousReceiver_demo" or (
             not attacker_contract_name and scenario.vulnerability_class.value == "reentrancy"
@@ -268,7 +276,14 @@ class ScenarioCompiler:
             lines = [f"// step {step.step_id}" + (f" — {_comment(step.comment)}" if step.comment else "")]
             if step.expected_revert:
                 lines.append("vm.expectRevert();")
-            lines.append(f"vm.prank({caller_expr});")
+            # K03: a step calling the receiver contract's attack() entry
+            # point must come from the test contract, which deployed the
+            # receiver and is its owner — pranking as the receiver trips
+            # the receiver's owner check ("not owner") and the call can
+            # never run. Other steps keep their prank (e.g. a deposit
+            # that must credit the receiver's address).
+            if not (step.target == "attacker" and fn_name == "attack" and attacker_contract_name):
+                lines.append(f"vm.prank({caller_expr});")
             if step.target == "attacker" and not attacker_contract_name:
                 payload = _string_literal(step.function) + (", " + args_str if args_str else "")
                 # Keep each result scoped so repeated step IDs in setup cannot collide.
