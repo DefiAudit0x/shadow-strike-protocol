@@ -184,6 +184,21 @@ class ScenarioCompiler:
         contract_decls = []
         setup_lines = []
 
+        # 11b: placeholder addresses replaced by a deployed contract
+        # (K02 below), so a balance keyed by one must fund the deployed
+        # contract instead of the dead placeholder.
+        replaced_placeholders: dict[str, str] = {}
+        # 11c: a value-bearing receiver attack is split into a separate
+        # deposit on the primary target (11b) — a synthesized interface
+        # for that target must declare deposit(), or the generated test
+        # cannot compile (the interface is otherwise built only from
+        # steps that target the alias directly).
+        primary_alias = next(iter(scenario.initial_state.target_contracts), None)
+        value_attack = any(
+            step.target == "attacker" and _abi_types(step.function)[0] == "attack"
+            and step.caller == "attacker" and step.value_eth
+            for step in all_steps
+        )
         for alias, address in scenario.initial_state.target_contracts.items():
             _identifier(alias)
             _address(address)
@@ -200,9 +215,20 @@ class ScenarioCompiler:
                         params = ", ".join(t + (" calldata" if t in ("string", "bytes") else "")
                                            for t in types)
                         methods.add(f"function {name}({params}) external payable;")
+                if alias == primary_alias and value_attack:
+                    methods.add("function deposit() external payable;")
                 interfaces.append(f"interface {sol_type} {{ " + " ".join(sorted(methods)) + " }")
             contract_decls.append(f"{sol_type} {alias};")
-            setup_lines.append(f"{alias} = {sol_type}({_argument(address, 'address')});")
+            if address.lower() == "0x" + "1" * 40 and sol_type == "IVault":
+                # K02: the placeholder address is undeployed — bind a
+                # real local Vault instead. The scenario's balances seed
+                # its reserve (the vm.deal loop below), so a generated
+                # test executes end-to-end against a real contract.
+                import_lines.append('import {Vault} from "../../src/Vault.sol";')
+                setup_lines.append(f"{alias} = {sol_type}(address(new Vault()));")
+                replaced_placeholders[address.lower()] = alias
+            else:
+                setup_lines.append(f"{alias} = {sol_type}({_argument(address, 'address')});")
 
         bounded_receiver = attacker_contract_name == "MaliciousReceiver_demo" or (
             not attacker_contract_name and scenario.vulnerability_class.value == "reentrancy"
@@ -243,7 +269,12 @@ class ScenarioCompiler:
         for alias, amount in scenario.initial_state.balances.items():
             if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0:
                 raise ShadowStrikeValidationError("ETH amounts must be finite nonnegative numbers")
-            setup_lines.append(f"vm.deal({account(alias)}, {amount} ether);")
+            # 11b: a balance keyed by a replaced target's placeholder
+            # address funds the deployed contract, not the dead
+            # placeholder (before the K02 deploy, that key funded the
+            # vault itself).
+            funded = replaced_placeholders.get(alias.lower(), alias)
+            setup_lines.append(f"vm.deal({account(funded)}, {amount} ether);")
         for token, amount in scenario.attacker.initial_tokens.items():
             # forge-std's ERC20 deal seeds base units without assuming a mint API.
             if type(amount) is float and math.isfinite(amount) and amount.is_integer():
@@ -266,9 +297,48 @@ class ScenarioCompiler:
             caller_expr = "address(attacker)" if step.caller == "attacker" else _argument(step.caller, "address")
             value_clause = f"{{value: {step.value_eth} ether}}" if step.value_eth else ""
             lines = [f"// step {step.step_id}" + (f" — {_comment(step.comment)}" if step.comment else "")]
+            # K03 (11b-scoped): the receiver-driving attack() call — the
+            # scenario's attacker driving its own entry point on one of
+            # the known demo/bounded receivers — must come from the test
+            # contract (the receiver's owner), not pranked as the
+            # receiver (the owner check would reject it). Any other
+            # caller keeps its configured prank, and any other receiver
+            # keeps its configured behavior: an unrelated caller must
+            # still fail the owner check, and an expected_revert
+            # scenario must still revert.
+            receiver_attack = (
+                step.target == "attacker" and fn_name == "attack"
+                and step.caller == "attacker" and attacker_contract_name
+                in ("MaliciousReceiver_demo", "ShadowStrikeBoundedReceiver")
+            )
+            if receiver_attack and step.value_eth:
+                if step.expected_revert:
+                    # 11c: the stake must be part of the reverted call,
+                    # or the deposit would be committed even when
+                    # attack() reverts (and could fail outside the
+                    # expected-revert scope). Keep the value on the
+                    # single atomic attack() call and fund the test
+                    # contract with exactly the stake — it rolls back
+                    # with the revert, and no gain is measured for a
+                    # reverted step, so no subsidy is realized.
+                    lines.append(f"vm.deal(address(this), {step.value_eth} ether);")
+                else:
+                    # 11b: the stake must come from the receiver's own
+                    # balance, not the test contract's — split it into a
+                    # separate deposit from the receiver, then call
+                    # attack() with no value (mirrors the reference test's
+                    # K04 fix; otherwise the test contract funds the attack
+                    # and the measured gain includes test money, or the call
+                    # fails outright when the test contract holds no ETH).
+                    primary = next(iter(scenario.initial_state.target_contracts), None)
+                    if primary is not None:
+                        lines.append("vm.prank(address(attacker));")
+                        lines.append(f"{primary}.deposit{{value: {step.value_eth} ether}}();")
+                        value_clause = ""
             if step.expected_revert:
                 lines.append("vm.expectRevert();")
-            lines.append(f"vm.prank({caller_expr});")
+            if not receiver_attack:
+                lines.append(f"vm.prank({caller_expr});")
             if step.target == "attacker" and not attacker_contract_name:
                 payload = _string_literal(step.function) + (", " + args_str if args_str else "")
                 # Keep each result scoped so repeated step IDs in setup cannot collide.

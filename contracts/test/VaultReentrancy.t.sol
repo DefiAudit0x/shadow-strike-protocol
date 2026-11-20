@@ -38,10 +38,22 @@ contract VaultReentrancyTest is Test {
 
     function test_reentrancy_drains_vulnerable_vault() public {
         uint256 attackerBefore = address(attacker).balance;
-        uint256 vaultBefore = address(vault).balance;   // 11 ETH: 10 victim + 1 attacker's own deposit
+        // 10 ETH of victim deposits. The attacker's own 1 ETH is NOT
+        // in the vault yet — it deposits it below, from its own funds
+        // (the 1 ETH it was dealt in setUp), not from harness money.
+        uint256 vaultBefore = address(vault).balance;
 
+        // Step 1 — establish a legitimate position to withdraw against,
+        // spending the attacker's own 1 ETH.
+        vm.prank(address(attacker));
+        vault.deposit{value: 1 ether}();
+
+        // Step 2 — trigger withdraw(); reentry happens inside the
+        // receive() callback. Called with no value: the deposit above
+        // is the stake, and the caller (this test contract) is the
+        // receiver's owner.
         vm.prank(address(this));
-        attacker.attack{value: 1 ether}();
+        attacker.attack();
 
         uint256 attackerAfter = address(attacker).balance;
         uint256 vaultAfter = address(vault).balance;
@@ -53,22 +65,40 @@ contract VaultReentrancyTest is Test {
         // MaliciousReceiver_demo caps reentry at MAX_REENTRIES = 3 (a
         // deliberate gas/safety bound on the attacker contract itself,
         // not a property of the Vault bug) — so this drains 4 x 1 ETH
-        // (1 initial withdraw() + 3 reentrant ones), NOT the vault's
-        // entire 11 ETH balance. Asserting a full drain to zero was
-        // simply wrong; what the bug actually guarantees is: the
-        // attacker profits well beyond their own 1 ETH deposit, and
-        // the vault loses funds belonging to OTHER depositors (the
-        // victim's 10 ETH), not just the attacker's own stake.
-        assertGt(attackerAfter - attackerBefore, 1 ether,
-            "attacker should have extracted more than the 1 ETH they deposited");
-        assertLt(vaultAfter, vaultBefore - 1 ether,
-            "vault should have lost MORE than just the attacker's own 1 ETH deposit "
-            "(i.e. the victim's funds were touched too)");
+        // (1 initial withdraw() + 3 reentrant ones). The vault goes
+        // 10 -> 7 and the attacker's net gain is 3 ETH: the 1 ETH it
+        // deposited is its own money (it went in and came back as part
+        // of the 4 withdrawals), so the theft is exactly the 3 ETH of
+        // victim funds — the claimed gain includes no outside money.
+        assertEq(vaultBefore, 10 ether, "vault holds the victim's 10 ETH before the attack");
+        assertEq(vaultAfter, 7 ether, "vault lost exactly the 3 ETH the reentrancy withdrew");
+        assertEq(attackerAfter - attackerBefore, 3 ether,
+            "net gain is 3 ETH of victim funds; the attacker's own 1 ETH deposit is not profit");
     }
 
     function test_safevault_resists_same_attack() public {
+        // Same shape as the vulnerable test: the receiver deposits its
+        // own 1 ETH first, then calls attack() with no value.
+        vm.prank(address(attackerVsSafe));
+        safeVault.deposit{value: 1 ether}();
+
+        // The reentrant withdraw() finds deposits[attacker] already 0
+        // (CEI: effects before interaction), so it reverts with
+        // "nothing to withdraw" and the outer withdraw() fails with
+        // "transfer failed" — the whole attack() call reverts, rolling
+        // back the 1 ETH deposit too, so every balance is unchanged.
+        uint256 safeBefore = address(safeVault).balance;
+        uint256 attackerBefore = address(attackerVsSafe).balance;
         vm.prank(address(this));
-        vm.expectRevert(); // second reentrant withdraw() call reverts: deposits[attacker] already 0
-        attackerVsSafe.attack{value: 1 ether}();
+        vm.expectRevert("transfer failed");
+        attackerVsSafe.attack();
+        assertEq(address(safeVault).balance, safeBefore,
+            "safe vault balance unchanged after the reverted attack");
+        assertEq(safeVault.deposits(victim), 10 ether,
+            "victim's 10 ETH deposit is untouched");
+        assertEq(safeVault.deposits(address(attackerVsSafe)), 1 ether,
+            "attacker's own 1 ETH deposit is still recorded");
+        assertEq(address(attackerVsSafe).balance, attackerBefore,
+            "attacker funds intact after the reverted attack");
     }
 }
