@@ -1,7 +1,6 @@
-# Layer 2 of Shadow Strike's isolation (layer 1 is sandbox.py's rlimits).
-# Builds a minimal, non-root, read-only-filesystem container to run
-# ForgeRunner in. Network access is restricted to the single RPC host
-# passed in at run time — nothing else resolves.
+# Manual-only Foundry container; ForgeRunner does not launch it.
+# The example's read-only filesystem is a run-time flag. The named
+# network is aspirational; see egress-allowlist-README.md.
 #
 # Build: docker build -f docker/sandbox.Dockerfile -t shadow-strike-sandbox .
 # Run:   docker run --rm \
