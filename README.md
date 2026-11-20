@@ -61,7 +61,7 @@ shadow_strike/
 contracts/
 ├── src/Vault.sol              # الهدف الضعيف (reentrancy حقيقي)
 ├── src/SafeVault.sol          # نفس الواجهة، مُصلَح
-├── src/attackers/             # عقد المهاجم (يدوي + نسخة مولَّدة)
+├── src/attackers/             # عقود المهاجم المكتوبة يدوياً
 └── test/                       # Foundry tests (يدوي + مولَّد تلقائياً)
 ```
 
@@ -69,7 +69,7 @@ contracts/
 
 | العنصر | الحالة |
 |---|---|
-| 11/11 نوع ثغرة في مكتبة الهجمات | مسجَّلة؛ 7 منها (`reentrancy`, `access_control`, `oracle_manipulation`, `flash_loan`, `price_manipulation`, `signature_replay`, `initialization`) لها attacker template تنفيذي؛ 4 (`accounting`, `upgradeability`, `cross_contract`, `economic`) موثقة كـ roadmap مع تبرير معماري صريح لماذا لا يمكن تعميمها |
+| 11/11 نوع ثغرة في مكتبة الهجمات | مسجَّلة كبيانات وصفية في `meta.yaml`؛ السيناريوهات الآلية تحتاج builder مسجَّلاً ودعم executor. لا تُولَّد عقود المهاجم من المكتبة؛ يمرَّر عقد Solidity مكتوب يدوياً إلى compiler عند الحاجة |
 | `oracle_manipulation` حي | `SimplePool` + `OracleFedLendingMarket` + `OracleManipulationAttacker` في `mock_executor.py` — هجوم تلاعب بالسعر فعلي ومُختبَر (pool رقيق يُستغل، pool عميق يصمد) |
 | `access_control` حي | `AccessControlTarget` — حارس مكسور يُستغل، حارس مُفعَّل يصدّ الهجوم |
 | Sandboxing حقيقي | `execution/sandbox.py` — حدود CPU/ذاكرة عبر `resource.setrlimit`، مُختبَرة حياً (عملية runaway تُقتل فعلياً)؛ + `docker/sandbox.Dockerfile` للعزل الكامل بالحاويات |
