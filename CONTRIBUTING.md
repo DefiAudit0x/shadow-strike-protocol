@@ -6,16 +6,21 @@ This is the most common contribution shape. Follow this order — each
 step is independently testable, so you can verify as you go instead of
 debugging a big-bang addition.
 
-### 1. Attack Library plugin (`attack_library/<class_name>/`)
-- `meta.yaml`: `vulnerability_class`, `display_name`, `description`,
-  `default_invariants`, `default_success_conditions`,
-  `heuristic_source_patterns` (recon regex-ish hints — weak signals,
-  never a verdict on their own), `attacker_template` (filename or `null`
-  if this class can't be genericized — see the four roadmap classes'
-  `meta.yaml` for how to document *why* not).
-- `attacker_template.sol.j2`: a Jinja2 template for the real Foundry
-  attacker contract (only if you're giving this class an automated
-  builder — hand-authored-only classes skip this).
+### 1. Attack Library metadata (`attack_library/<class_name>/`)
+Add `meta.yaml` with `vulnerability_class`, `display_name`, `description`,
+`default_invariants`, `default_success_conditions`, and
+`heuristic_source_patterns` (recon hints — weak signals, never a verdict
+on their own). Metadata alone does not add automated scenario support;
+that requires the registered builder in step 3.
+
+Attacker contract templates are not supported. For Foundry scenarios
+that need an attacker contract, write a concrete Solidity contract and
+supply its name and import path via `ScenarioCompiler`'s
+`attacker_contract_name` and `attacker_import_path` arguments. The
+compiler imports that existing contract; it does not generate it from
+library metadata. See `contracts/src/attackers/MaliciousReceiver_demo.sol`
+and `examples/run_demo.py` for this explicit contract path. Check generated
+Solidity with `forge build` before any separately authorized execution.
 
 ### 2. Mock executor support (`execution/mock_executor.py`)
 Add the Python classes that model the vulnerable (and, ideally, fixed)
@@ -52,8 +57,8 @@ complete cleanly.
 
 ## Adding a class with NO automated builder (accounting, upgradeability, cross_contract, economic, or your own bespoke one-off)
 
-Skip steps 1–3 above (or do only step 1's `meta.yaml`, with
-`attacker_template: null` and a documented reason). Write the scenario
+Skip steps 1–3 above (or add only step 1's `meta.yaml` and document
+that automated scenario building is unsupported). Write the scenario
 directly as YAML via `core/scenario_loader.py` — see
 `examples/historical_incidents/` for worked examples of this path, and
 `examples/scenarios/reentrancy_demo.yaml` for the minimal shape.
