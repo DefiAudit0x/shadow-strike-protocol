@@ -38,6 +38,7 @@ class ForgeRunner:
         # These host resource limits do not restrict filesystem or network access.
         self.sandbox = SandboxedSubprocess(sandbox_limits or SandboxLimits(
             cpu_seconds=timeout_seconds, wall_clock_seconds=timeout_seconds + 10,
+            max_output_bytes=1024 * 1024,
         ))
         if shutil.which("forge") is None:
             raise FoundryNotInstalledError(
@@ -87,6 +88,14 @@ class ForgeRunner:
 
     # ------------------------------------------------------------------
     def _parse_result(self, scenario: AttackScenario, proc: subprocess.CompletedProcess) -> ExecutionResult:
+        if "\n[output truncated]\n" in proc.stdout:
+            return ExecutionResult(
+                scenario_id=scenario.scenario_id,
+                reverted=True,
+                revert_reason="forge output exceeded the sandbox output limit "
+                              f"({self.sandbox.limits.max_output_bytes} bytes)",
+                state_vars={}, state_diff={}, call_trace=[], engine="foundry",
+            )
         state_vars: dict = {}
         logs: list[str] = []
         reverted = proc.returncode != 0
