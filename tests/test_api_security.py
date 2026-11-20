@@ -134,6 +134,67 @@ class TestAPISecurity(unittest.TestCase):
                                        "old-password", "path-secret", "log-secret"):
                             self.assertNotIn(secret, response.text)
 
+    def test_plural_credential_keys_are_redacted(self):
+        """Fix 9b (CodeRabbit Major on PR #31): a prefixed plural key such
+        as rpc_credentials normalizes to "rpccredentials", which matched
+        neither the singular "credential" suffix nor the exact
+        "credentials" name, so the secret survived redaction on the
+        public library route."""
+        from shadow_strike.storage.db import KnowledgeStore
+
+        evidence = {
+            "rpc_credentials": "https://user:rpc-pass@rpc.example/x",
+            "rpc_tokens": "tok-secret",
+            "api_secrets": "api-secret",
+            "safe": "kept",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "legacy.sqlite3")
+            with patch.dict(os.environ, {self.api.DB_PATH_ENV: db_path}):
+                store = KnowledgeStore(db_path)
+                store.add_library_entry("reentrancy", evidence)
+                store.close()
+                # The library route is public (no bearer token) — that is
+                # exactly why the redaction must catch these keys.
+                response = self.request("GET", "/attack-library/reentrancy")
+                self.assertEqual(response.status_code, 200, response.text)
+                row = response.json()[0]
+                sanitized = json.loads(row["scenario_template_json"])
+                self.assertEqual(sanitized["rpc_credentials"], "[REDACTED]")
+                self.assertEqual(sanitized["rpc_tokens"], "[REDACTED]")
+                self.assertEqual(sanitized["api_secrets"], "[REDACTED]")
+                self.assertEqual(sanitized["safe"], "kept")
+                for secret in ("rpc-pass", "tok-secret", "api-secret"):
+                    self.assertNotIn(secret, response.text)
+
+    def test_json_encoded_string_evidence_is_sanitized(self):
+        """Fix 9b (CodeRabbit Major on PR #31): a stored log that is a
+        JSON-encoded string with escaped slashes decodes to a bare URL,
+        but the redactor only sanitized decoded objects/lists and ran its
+        regex over the escaped original — which never matches `://` — so
+        the credential survived."""
+        from shadow_strike.storage.db import KnowledgeStore
+
+        evidence = {
+            "log": '"https:\\/\\/rpc.example\\/path-secret"',
+            "safe": "kept",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "legacy.sqlite3")
+            with patch.dict(os.environ, {self.api.DB_PATH_ENV: db_path}):
+                store = KnowledgeStore(db_path)
+                store.save_attempt("legacy", 1, "failure", evidence["log"], evidence, evidence)
+                store.close()
+                response = self.request("GET", "/runs/legacy", headers=self.auth())
+                self.assertEqual(response.status_code, 200, response.text)
+                row = response.json()[0]
+                sanitized = json.loads(row["execution_result_json"])
+                # The field stays a JSON-encoded string — only its decoded
+                # content is sanitized.
+                self.assertEqual(json.loads(sanitized["log"]), "[REDACTED]")
+                self.assertEqual(sanitized["safe"], "kept")
+                self.assertNotIn("path-secret", response.text)
+
     def test_job_evidence_and_errors_redact_credentials(self):
         for fails in (False, True):
             with self.subTest(fails=fails):
@@ -250,6 +311,38 @@ class TestAPISecurity(unittest.TestCase):
                 response = self.request("POST", route, headers=self.auth(), json=payload)
                 self.assertEqual(response.status_code, 202, response.text)
                 queue.assert_called_once()
+
+    def test_nonfinite_floats_return_422_not_500(self):
+        """Fix 9b (CodeRabbit Minor on PR #31): NaN/Infinity in
+        attacker_initial_eth made the validation-error response itself
+        fail serialization (Starlette rejects non-finite floats), so the
+        client got a 500 instead of the documented 422."""
+        import httpx
+
+        async def send(route, payload):
+            # Send the body raw: httpx's json= encodes strictly (allow_nan=False)
+            # and would raise client-side before the request is sent, while the
+            # server's json.loads accepts NaN/Infinity literals.
+            body = json.dumps(payload)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.api.app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                return await client.post(
+                    route,
+                    headers={**self.auth(), "Content-Type": "application/json"},
+                    content=body,
+                )
+
+        for route in ("/runs", "/benchmark", "/sentinel/hypothesis"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(route=route, value=value), patch.object(self.api, "_queue_job") as queue:
+                    payload = self.run_payload(attacker_initial_eth=value)
+                    if route == "/sentinel/hypothesis":
+                        payload.update(request_id="r", target_protocol="Vault")
+                    response = asyncio.run(send(route, payload))
+                    self.assertEqual(response.status_code, 422, response.text)
+                    queue.assert_not_called()
 
     def test_attack_library_hides_internal_paths(self):
         response = self.request("GET", "/attack-library")

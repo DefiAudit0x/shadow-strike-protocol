@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import os
 import re
 import uuid
@@ -20,7 +21,9 @@ from time import monotonic
 from typing import Literal
 
 try:
-    from fastapi import Depends, FastAPI, Header, HTTPException
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
 except ImportError as e:
     raise ImportError(
@@ -41,6 +44,30 @@ API_TOKEN_ENV = "SHADOW_STRIKE_API_TOKEN"
 DB_PATH_ENV = "SHADOW_STRIKE_DB_PATH"
 
 app = FastAPI(title="Shadow Strike Protocol API")
+
+
+def _sanitize_for_json(value):
+    """Replace non-finite floats (NaN/Infinity) with strings so error
+    details stay JSON-serializable. FastAPI's default validation-error
+    handler can 500 on older FastAPI/Starlette releases when the detail
+    carries a non-finite float (e.g. NaN rejected by allow_inf_nan=False),
+    because Starlette serializes responses with allow_nan=False."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _sanitize_for_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_for_json(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Same shape as FastAPI's default handler ({"detail": errors}, 422),
+    # with non-finite floats sanitized so the response itself serializes.
+    return JSONResponse(status_code=422, content={"detail": _sanitize_for_json(exc.errors())})
+
+
 library = AttackLibrary()
 
 # This queue is process-local. The bounded worker pool keeps requests from
@@ -70,7 +97,13 @@ def _redact_evidence(value):
         result = {}
         for key, item in value.items():
             name = re.sub(r"[^a-z0-9]", "", key.lower())
-            sensitive = name.endswith(("url", "password", "secret", "token", "apikey", "credential"))
+            # Singular AND plural suffixes: a prefixed plural such as
+            # rpc_credentials normalizes to "rpccredentials", which matches
+            # neither the singular suffix nor an exact "credentials" name.
+            sensitive = name.endswith((
+                "url", "urls", "password", "passwords", "secret", "secrets",
+                "token", "tokens", "apikey", "apikeys", "credential", "credentials",
+            ))
             result[key] = "[REDACTED]" if sensitive or name in {
                 "authorization", "proxyauthorization", "credentials", "privatekey",
             } else _redact_evidence(item)
@@ -82,7 +115,11 @@ def _redact_evidence(value):
             decoded = json.loads(value)
         except (ValueError, RecursionError):
             decoded = None
-        if isinstance(decoded, (dict, list)):
+        # A decoded JSON string can itself be a bare URL (possibly with
+        # escaped slashes, which the regex below never matches) — sanitize
+        # the decoded value and re-encode it instead of regexing the
+        # escaped original.
+        if isinstance(decoded, (dict, list, str)):
             return json.dumps(_redact_evidence(decoded))
         return re.sub(r"\b(?:https?|wss?)://[^\s<>\"'\\]+", "[REDACTED]", value, flags=re.IGNORECASE)
     return value
