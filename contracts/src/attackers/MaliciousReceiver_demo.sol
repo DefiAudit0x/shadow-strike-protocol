@@ -6,10 +6,9 @@ interface IVaultLike {
     function withdraw() external;
 }
 
-/// @notice Static hand-written twin of what attack_library/reentrancy/
-/// attacker_template.sol.j2 would generate for the bundled demo scenario.
-/// Kept here, non-generated, so `forge test` works standalone without
-/// running the Python compiler first.
+/// @notice Hand-written attacker contract for the bundled reentrancy demo.
+/// Supplied explicitly to ScenarioCompiler by name and import path;
+/// the attack library does not generate attacker contracts.
 contract MaliciousReceiver_demo {
     IVaultLike public immutable target;
     address public immutable owner;

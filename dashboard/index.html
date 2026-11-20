@@ -112,7 +112,7 @@ async function loadLibrary() {
     const res = await fetch(`${API_BASE}/attack-library`);
     const entries = await res.json();
     el.innerHTML = entries.map(e =>
-      `<span class="badge ${e.attacker_template ? 'badge-ok' : 'badge-fail'}" style="margin:0 6px 6px 0;">
+      `<span class="badge" style="margin:0 6px 6px 0;">
          ${e.display_name || e.vulnerability_class}
        </span>`
     ).join("");

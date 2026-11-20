@@ -1,13 +1,37 @@
 import ast
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 
 import yaml
 
-from shadow_strike.attack_library.registry import LIBRARY_ROOT
+from shadow_strike.attack_library.registry import LIBRARY_ROOT, AttackLibrary
+from shadow_strike.cli import cmd_library
 from shadow_strike.core.safe_eval import EMITTABLE_STATE_NAMES, safe_eval
 
 
 class TestAttackLibraryDefaults(unittest.TestCase):
+    def test_library_has_no_unsupported_attacker_templates(self):
+        library = AttackLibrary()
+        self.assertEqual(len(library.available_classes()), 11)
+        self.assertEqual(list(LIBRARY_ROOT.rglob("*.sol.j2")), [])
+        self.assertFalse(hasattr(library, "attacker_template_path"))
+        for vulnerability_class in library.available_classes():
+            with self.subTest(vulnerability_class=vulnerability_class):
+                self.assertNotIn("attacker_template", library.get(vulnerability_class))
+
+    def test_library_cli_lists_metadata_without_template_claims(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            cmd_library(None)
+        lines = output.getvalue().splitlines()
+        library = AttackLibrary()
+        self.assertEqual(len(lines), len(library.available_classes()))
+        self.assertNotIn("template=", output.getvalue())
+        for line, vulnerability_class in zip(lines, library.available_classes()):
+            self.assertEqual(line.split()[0], vulnerability_class)
+            self.assertIn(library.get(vulnerability_class)["display_name"], line)
+
     def test_all_defaults_use_emittable_state(self):
         paths = sorted(LIBRARY_ROOT.glob("*/meta.yaml"))
         self.assertEqual(len(paths), 11)

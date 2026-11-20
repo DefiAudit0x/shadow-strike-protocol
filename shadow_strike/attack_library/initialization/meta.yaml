@@ -17,4 +17,3 @@ heuristic_source_patterns:
   - pattern: '_disableInitializers'
     note: "good sign if present in the constructor of an implementation contract — absence is the flag, not the presence"
 
-attacker_template: attacker_template.sol.j2

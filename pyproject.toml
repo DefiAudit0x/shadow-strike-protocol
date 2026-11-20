@@ -50,7 +50,6 @@ include = ["shadow_strike*"]
 [tool.setuptools.package-data]
 shadow_strike = [
     "attack_library/*/meta.yaml",
-    "attack_library/*/*.sol.j2",
     "execution/templates/*.j2",
 ]
 

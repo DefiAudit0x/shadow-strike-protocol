@@ -20,4 +20,3 @@ heuristic_source_patterns:
   - pattern: 'convertToShares'
     note: "ERC-4626-style conversion — verify first-depositor / inflation-attack mitigations exist"
 
-attacker_template: attacker_template.sol.j2

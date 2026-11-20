@@ -18,7 +18,6 @@ heuristic_source_patterns:
   - pattern: 'IExternal'
     note: "generic interface naming is a weak signal only — flag any external call whose target is itself attacker-upgradable or attacker-deployable"
 
-attacker_template: null
 # roadmap — this class is defined by the RELATIONSHIP between specific
 # contracts in a specific deployment; see architecture doc §8, "attacks
 # that need bespoke per-protocol logic." Composes with whatever

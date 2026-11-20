@@ -17,7 +17,6 @@ heuristic_source_patterns:
   - pattern: '/ totalSupply'
     note: "division by a mutable total — check rounding direction and order of operations"
 
-attacker_template: null
 # roadmap — accounting bugs are inherently protocol-specific (the exact
 # arithmetic path differs every time); a generic attacker contract
 # can't target "an accounting error" the way it can target a known

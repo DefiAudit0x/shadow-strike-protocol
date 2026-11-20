@@ -20,5 +20,4 @@ heuristic_source_patterns:
   - pattern: 'flashLoan('
     note: "flash-loan entry point — check for reentrancy guards covering this path specifically"
 
-attacker_template: attacker_template.sol.j2
 composes_with: [oracle_manipulation, accounting, economic]

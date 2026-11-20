@@ -22,7 +22,6 @@ heuristic_source_patterns:
   - pattern: 'liquidate'
     note: "check liquidation incentive sizing against realistic attacker-triggered scenarios, not just organic ones"
 
-attacker_template: null
 # roadmap — by definition these require a full economic/game-theoretic
 # model of the specific protocol's incentives, not a reusable Solidity
 # attacker contract. This is the class the architecture doc's §8 risk
