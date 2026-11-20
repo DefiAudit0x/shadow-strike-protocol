@@ -228,6 +228,7 @@ def _execute_run(req: RunRequest) -> dict:
                 result.get("verifier_verdict"),
                 attempt_number=result["attempt_count"],
                 failure_reason=result["stopped_reason"],
+                attempts=result.get("attempt_records"),
             )
 
     return {

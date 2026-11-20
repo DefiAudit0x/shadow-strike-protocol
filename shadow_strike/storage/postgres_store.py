@@ -37,6 +37,7 @@ try:
         Text,
         create_engine,
     )
+    from sqlalchemy.dialects.postgresql import insert
     from sqlalchemy.orm import sessionmaker
 except ImportError as e:
     raise ImportError(
@@ -104,17 +105,41 @@ class PostgresKnowledgeStore:
         self.Session = sessionmaker(bind=self.engine)
 
     def save_scenario(self, scenario) -> str:
-        with self.Session() as session:
-            session.execute(scenarios_table.delete().where(scenarios_table.c.id == scenario.scenario_id))
-            session.execute(scenarios_table.insert().values(
-                id=scenario.scenario_id,
-                vulnerability_class=scenario.vulnerability_class.value,
-                target_protocol=scenario.target_protocol,
-                scenario_json=scenario.to_json(),
-                created_at=time.time(),
-            ))
-            session.commit()
+        scenario_json = scenario.to_json(sort_keys=True)
+        definition = {
+            "vulnerability_class": scenario.vulnerability_class.value,
+            "target_protocol": scenario.target_protocol,
+            "scenario_json": scenario_json,
+        }
+        statement = insert(scenarios_table).values(id=scenario.scenario_id, created_at=time.time(), **definition)
+        with self.Session.begin() as session:
+            inserted = session.execute(
+                statement.on_conflict_do_nothing(index_elements=[scenarios_table.c.id])
+                .returning(scenarios_table.c.id)
+            ).scalar_one_or_none()
+            if inserted is None:
+                # Serialize definition changes with foreign-key checks on new attempts.
+                stored = session.execute(
+                    scenarios_table.select().where(scenarios_table.c.id == scenario.scenario_id).with_for_update()
+                ).one()
+                has_attempts = session.execute(
+                    attempts_table.select().where(attempts_table.c.scenario_id == scenario.scenario_id).limit(1)
+                ).first() is not None
+                if has_attempts:
+                    if json.dumps(json.loads(stored.scenario_json), sort_keys=True) != scenario_json:
+                        raise ValueError(f"Cannot change scenario {scenario.scenario_id}: it already has attempts")
+                else:
+                    session.execute(statement.on_conflict_do_update(
+                        index_elements=[scenarios_table.c.id], set_=definition,
+                    ))
         return scenario.scenario_id
+
+    def get_scenario(self, scenario_id: str) -> dict | None:
+        with self.Session() as session:
+            row = session.execute(
+                scenarios_table.select().where(scenarios_table.c.id == scenario_id)
+            ).mappings().one_or_none()
+            return dict(row) if row is not None else None
 
     def save_attempt(self, scenario_id, attempt_number, status, failure_reason,
                       execution_result, verifier_result) -> str:
@@ -150,6 +175,12 @@ class PostgresKnowledgeStore:
             ))
             session.commit()
         return proof_id
+
+    def list_proofs(self) -> list[dict]:
+        """Return stored proof rows, newest first."""
+        with self.Session() as session:
+            rows = session.execute(proofs_table.select().order_by(proofs_table.c.created_at.desc())).mappings()
+            return [dict(row) for row in rows]
 
     def add_library_entry(self, vulnerability_class, scenario_template, tags=None) -> str:
         entry_id = f"lib_{uuid.uuid4().hex[:10]}"

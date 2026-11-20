@@ -63,25 +63,32 @@ class KnowledgeStore:
     def __init__(self, db_path: str | Path = ":memory:"):
         self.db_path = str(db_path)
         self.conn = sqlite3.connect(self.db_path)
+        self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.conn.commit()
 
     # ---- scenarios --------------------------------------------------
     def save_scenario(self, scenario) -> str:
-        self.conn.execute(
-            "INSERT OR REPLACE INTO scenarios (id, vulnerability_class, target_protocol, scenario_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                scenario.scenario_id,
-                scenario.vulnerability_class.value,
-                scenario.target_protocol,
-                scenario.to_json(),
-                time.time(),
-            ),
-        )
-        self.conn.commit()
+        scenario_json = scenario.to_json(sort_keys=True)
+        with self.conn:
+            result = self.conn.execute(
+                "INSERT INTO scenarios (id, vulnerability_class, target_protocol, scenario_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "vulnerability_class = excluded.vulnerability_class, "
+                "target_protocol = excluded.target_protocol, scenario_json = excluded.scenario_json "
+                "WHERE NOT EXISTS (SELECT 1 FROM attempts WHERE scenario_id = excluded.id)",
+                (scenario.scenario_id, scenario.vulnerability_class.value, scenario.target_protocol,
+                 scenario_json, time.time()),
+            )
+            if result.rowcount == 0:
+                stored = self.get_scenario(scenario.scenario_id)
+                if json.dumps(json.loads(stored["scenario_json"]), sort_keys=True) != scenario_json:
+                    raise ValueError(f"Cannot change scenario {scenario.scenario_id}: it already has attempts")
         return scenario.scenario_id
+
+    def get_scenario(self, scenario_id: str) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM scenarios WHERE id = ?", (scenario_id,)).fetchone()
 
     # ---- attempts -----------------------------------------------------
     def save_attempt(
@@ -94,21 +101,21 @@ class KnowledgeStore:
         verifier_result: dict | None,
     ) -> str:
         attempt_id = f"att_{uuid.uuid4().hex[:10]}"
-        self.conn.execute(
-            "INSERT INTO attempts (id, scenario_id, attempt_number, status, failure_reason, "
-            "execution_result_json, verifier_result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                attempt_id,
-                scenario_id,
-                attempt_number,
-                status,
-                failure_reason,
-                json.dumps(execution_result, default=str) if execution_result else None,
-                json.dumps(verifier_result, default=str) if verifier_result else None,
-                time.time(),
-            ),
-        )
-        self.conn.commit()
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO attempts (id, scenario_id, attempt_number, status, failure_reason, "
+                "execution_result_json, verifier_result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    attempt_id,
+                    scenario_id,
+                    attempt_number,
+                    status,
+                    failure_reason,
+                    json.dumps(execution_result, default=str) if execution_result else None,
+                    json.dumps(verifier_result, default=str) if verifier_result else None,
+                    time.time(),
+                ),
+            )
         return attempt_id
 
     def attempts_for_scenario(self, scenario_id: str) -> list[sqlite3.Row]:
@@ -126,19 +133,19 @@ class KnowledgeStore:
         critical_transition: str | None = None,
     ) -> str:
         proof_id = f"proof_{uuid.uuid4().hex[:10]}"
-        self.conn.execute(
-            "INSERT INTO proofs (id, attempt_id, proof_artifact_json, broken_invariant, "
-            "critical_transition, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                proof_id,
-                attempt_id,
-                json.dumps(proof_artifact, default=str),
-                broken_invariant,
-                critical_transition,
-                time.time(),
-            ),
-        )
-        self.conn.commit()
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO proofs (id, attempt_id, proof_artifact_json, broken_invariant, "
+                "critical_transition, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    proof_id,
+                    attempt_id,
+                    json.dumps(proof_artifact, default=str),
+                    broken_invariant,
+                    critical_transition,
+                    time.time(),
+                ),
+            )
         return proof_id
 
     def list_proofs(self) -> list[sqlite3.Row]:
