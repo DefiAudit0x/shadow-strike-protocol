@@ -22,7 +22,7 @@ PYTHONPATH=. python3 examples/run_demo.py
 
 1. **Recon** حقيقي على `contracts/src/Vault.sol` (عقد فيه ثغرة reentrancy حقيقية)
 2. **Hypothesis generation** قائم على أنماط مكتبة الهجمات (`attack_library/`)
-3. **بناء AttackScenario** مُتحقَّق منه بالكامل (Pydantic-style validation)
+3. **بناء AttackScenario** مُتحقَّق منه بالكامل (dataclass validation)
 4. **تنفيذ فعلي** للهجوم عبر محاكي EVM مصغّر (`MockExecutor`) — ليس ادعاءً،
    بل ledger حقيقي للـ ETH مع دلالات reentrancy صحيحة
 5. **توليد Foundry test حقيقي** (`.t.sol`) من نفس الـ scenario بالضبط —
@@ -33,7 +33,7 @@ PYTHONPATH=. python3 examples/run_demo.py
    أن الإصلاح يصمد — `ATTACK FAILED` هنا هو النتيجة المطلوبة
 
 ```bash
-PYTHONPATH=. python3 -m unittest discover -s tests -v   # 19 اختبار، كلها تمر
+PYTHONPATH=. python3 -m unittest discover -s tests -v
 PYTHONPATH=. python3 -m shadow_strike.cli library        # عرض مكتبة الهجمات
 ```
 
