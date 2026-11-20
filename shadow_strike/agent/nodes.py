@@ -352,7 +352,7 @@ def scenario_planner_node(
     if builder is None:
         # Refuses to guess a scenario shape it has no template for, rather
         # than emit something that merely *looks* plausible. Intentional —
-        # see architecture §4, "Attack Library as plugin system":
+        # see architecture §4, "Attack Library metadata and scenario builders":
         # no builder registered = no scenario, full stop.
         state["current_scenario"] = None
         state["planner_error"] = f"no scenario builder registered yet for {vuln_class!r}"
