@@ -10,7 +10,7 @@
 
 1. **Separation of Concerns الصارم**: Reasoning (LLM) ≠ Execution (Foundry/EVM) ≠ Verification (Proof Engine). لا يلتقي الثلاثة في مكون واحد أبداً.
 2. **لا حُكم بدون دليل**: أي "نجاح" للهجوم يجب أن يُشتق من state diff + trace فعليين، لا من نص يولّده LLM.
-3. **Scenario كبيانات، لا كسكريبت حر**: كل سيناريو هجوم هو كائن Pydantic منظم وقابل للتسلسل (serializable)، وليس كود Python عشوائي.
+3. **Scenario كبيانات، لا كسكريبت حر**: كل سيناريو هجوم هو كائن dataclass منظم وقابل للتسلسل (serializable)، وليس كود Python عشوائي.
 4. **Determinism في طبقة التنفيذ**: نفس الـ scenario + نفس fork block يجب أن يعطي نفس النتيجة دائماً (fixed seed، fixed block number، fixed timestamp).
 5. **Composability**: كل عنصر (hypothesis generator، executor، verifier) يجب أن يُستبدل منفرداً دون كسر الباقي.
 6. **Everything is an artifact**: كل محاولة، ناجحة أو فاشلة، تُخزَّن كمعرفة قابلة لإعادة الاستخدام.
@@ -33,7 +33,7 @@
 ┌───────▼───────┐     ┌───────▼────────┐     ┌───────▼────────┐
 │  Scenario      │     │   Agent Layer   │     │  Knowledge      │
 │  Engine        │◄────┤   (LangGraph)   │────►│  Store          │
-│  (Pydantic)    │     │   Reasoning     │     │  (Postgres)     │
+│ (dataclasses) │     │   Reasoning     │     │  (Postgres)     │
 └───────┬───────┘     └───────┬────────┘     └─────────────────┘
         │                     │
         │              ┌──────▼───────┐
@@ -76,73 +76,30 @@
 
 هذه الطبقة هي "العقد" (contract بمعنى interface) بين كل المكونات الأخرى. كل شيء يمر منها.
 
-**النموذج الأساسي (Pydantic v2):**
+**Core schema: stdlib dataclasses with manual validation**
 
-```python
-from pydantic import BaseModel, Field, field_validator
-from enum import Enum
-from typing import Literal
+The canonical implementation is `shadow_strike/core/models.py`. It uses
+`@dataclass`, `field(default_factory=...)` for mutable defaults, and
+`__post_init__` validation, raising `ShadowStrikeValidationError` for invalid
+scenario structure. Pydantic is used by the optional API layer, not by the
+core scenario model.
 
-class AttackerModel(BaseModel):
-    address: str
-    initial_eth: float = 0
-    initial_tokens: dict[str, float] = {}  # token_symbol -> amount
-    controlled_contracts: list[str] = []    # e.g. malicious fallback contract
+- `AttackerModel`: address (default `attacker`), initial ETH and tokens, and controlled contracts.
+- `TransactionStep`: step ID, caller, target, full function signature, arguments,
+  value in ETH, expected-revert flag, and optional comment.
+- `InitialState`: fork URL/block, target aliases/addresses, balances, and setup calls.
+- `SuccessCondition`: nonempty expression and description.
+- `VulnerabilityClass`: the 11 class names enumerated in the implementation.
+- `AttackScenario`: class, protocol, hypothesis, attacker, initial state, steps,
+  success conditions, generated scenario ID, assumptions, invariants,
+  `max_retries=3`, and `attacker_max_reentries=3`.
 
-class TransactionStep(BaseModel):
-    step_id: int
-    caller: str                 # "attacker" | contract address
-    target: str                 # contract address or alias
-    function: str                # e.g. "withdraw(uint256)"
-    args: list
-    value_eth: float = 0
-    expected_revert: bool = False
-    comment: str | None = None
-
-class InitialState(BaseModel):
-    fork_url: str                # RPC for forked mainnet/testnet
-    fork_block: int               # pinned block for determinism
-    target_contracts: dict[str, str]   # alias -> address
-    balances: dict[str, float] = {}
-    custom_setup_calls: list[TransactionStep] = []
-
-class SuccessCondition(BaseModel):
-    expression: str               # e.g. "attacker.eth_balance_after - attacker.eth_balance_before > 0"
-    description: str
-
-class VulnerabilityClass(str, Enum):
-    REENTRANCY = "reentrancy"
-    ORACLE_MANIPULATION = "oracle_manipulation"
-    FLASH_LOAN = "flash_loan"
-    ACCESS_CONTROL = "access_control"
-    PRICE_MANIPULATION = "price_manipulation"
-    SIGNATURE_REPLAY = "signature_replay"
-    ACCOUNTING = "accounting"
-    INITIALIZATION = "initialization"
-    UPGRADEABILITY = "upgradeability"
-    CROSS_CONTRACT = "cross_contract"
-    ECONOMIC = "economic"
-
-class AttackScenario(BaseModel):
-    scenario_id: str
-    vulnerability_class: VulnerabilityClass
-    target_protocol: str
-    hypothesis: str                       # النص الذي ولّده الـLLM أو أدخله الباحث
-    attacker: AttackerModel
-    initial_state: InitialState
-    steps: list[TransactionStep]
-    assumptions: list[str] = []
-    invariants_under_test: list[str] = []  # e.g. "vault.totalAssets >= sum(user.shares)"
-    success_conditions: list[SuccessCondition]
-    max_retries: int = 3
-
-    @field_validator("steps")
-    @classmethod
-    def must_have_steps(cls, v):
-        if not v:
-            raise ValueError("Scenario must have at least one transaction step")
-        return v
-```
+Scenario validation requires nonempty steps and success conditions, unique
+step IDs, and nonnegative retry/reentry limits. Nested dataclasses validate
+balances, fork block, target presence, function signatures, and expressions.
+`to_dict` / `to_json` serialize the model; `from_dict` / `from_json` reconstruct
+nested dataclasses and run the same validation. YAML loading uses those same
+dataclasses and rejects unknown top-level fields.
 
 **لماذا هذا مهم معمارياً:** أي سيناريو، سواء أتى من LLM أو من باحث بشري كتبه يدوياً، يمر عبر نفس الـ validation. النظام لا يستطيع تنفيذ سيناريو غير مكتمل أو غير منظم — وهذا يفصل "نية الهجوم" عن "قابلية تنفيذه".
 
@@ -173,7 +130,7 @@ graph = StateGraph(ShadowStrikeState)
 
 graph.add_node("recon", recon_node)
 graph.add_node("hypothesis_generator", hypothesis_node)
-graph.add_node("scenario_planner", scenario_planner_node)   # يبني AttackScenario Pydantic object
+graph.add_node("scenario_planner", scenario_planner_node)   # يبني AttackScenario dataclass object
 graph.add_node("executor", executor_node)                   # يستدعي Execution Engine (غير LLM)
 graph.add_node("verifier", verifier_node)                   # يستدعي Verifier (غير LLM، منطق حتمي)
 graph.add_node("critic", critic_node)                        # LLM يحلل سبب الفشل
@@ -203,7 +160,7 @@ graph.add_conditional_edges(
 )
 ```
 
-**نقطة تصميم حرجة:** `executor_node` و`verifier_node` هما **wrappers** حول Execution Engine وVerifier — لا يحتويان على أي استدعاء LLM. الـ LLM يدخل فقط في: `recon`، `hypothesis_generator`، `scenario_planner` (لاقتراح الخطوات، ثم يُمرَّر الناتج عبر Pydantic validation)، و`critic`.
+**نقطة تصميم حرجة:** `executor_node` و`verifier_node` هما **wrappers** حول Execution Engine وVerifier — لا يحتويان على أي استدعاء LLM. الـ LLM يدخل فقط في: `recon`، `hypothesis_generator`، `scenario_planner` (لاقتراح الخطوات، ثم يُمرَّر الناتج عبر dataclass validation)، و`critic`.
 
 ---
 
@@ -270,7 +227,7 @@ forge test --match-contract ShadowStrike_Scenario_0014 \
 3. **Trace & State Capture** — يُستخرج من `--json` output:
    - `state_diff` (قبل/بعد لكل عنوان وslot متأثر)
    - `call_trace` الكامل (شجرة الاستدعاءات، للـ critic لاحقاً)
-   - `gas_used`, `revert_reason` إن وجد
+   - `revert_reason` (gas usage is not measured or reported) إن وجد
 
 **لماذا Anvil fork وليس simulation مكتوب يدوياً؟** لأن fork حقيقي من mainnet/testnet يعطي الحالة الفعلية للبروتوكول المستهدف (liquidity, oracle prices, إلخ)، بدل محاكاة مبسطة قد تخفي أو تخترع ثغرات غير حقيقية.
 
@@ -399,7 +356,7 @@ and neither the runner nor the Dockerfile enforces it.
 2. recon_node (LLM): يقرأ الكود، يستخرج الدوال الحساسة، ينتج recon_notes
 3. hypothesis_generator (LLM): "withdraw() قد تكون عرضة لـ reentrancy
    بسبب تحديث balance بعد external call"
-4. scenario_planner (LLM + Pydantic validation):
+4. scenario_planner (LLM + dataclass validation):
    يبني AttackScenario كامل (attacker, steps, success_conditions)
    → فشل الـ validation هنا = رجوع فوري للـ LLM لإصلاح الشكل، بدون تنفيذ EVM
 5. executor_node: Scenario Compiler يولّد .t.sol → Foundry Runner ينفّذ
@@ -468,7 +425,7 @@ GET    /attack-library/{class}     → سيناريوهات معمَّمة جا�
 | الطبقة | التقنية | السبب |
 |---|---|---|
 | Reasoning | LangGraph + أي LLM API | state machine صريح، قابل للتتبع، لا "agent سحري" |
-| Scenario schema | Pydantic v2 | validation صارم + serialization |
+| Scenario schema | stdlib dataclasses | validation صارم + serialization |
 | Execution | Foundry (forge + anvil) | معيار الصناعة لاختبار EVM، fork mode، cheatcodes |
 | Template generation | Jinja2 | توليد Solidity من بيانات منظمة |
 | Orchestration API | FastAPI | async، WebSocket للـ streaming |
@@ -482,7 +439,7 @@ GET    /attack-library/{class}     → سيناريوهات معمَّمة جا�
 ## 7. خارطة الطريق المقترحة
 
 **Phase 0 — Core loop (MVP)**
-- Pydantic models + سيناريو واحد مكتوب يدوياً (reentrancy) + Foundry execution يدوي + verifier بسيط.
+- Dataclass models + سيناريو واحد مكتوب يدوياً (reentrancy) + Foundry execution يدوي + verifier بسيط.
 - لا LangGraph بعد، لا LLM — فقط إثبات أن pipeline البيانات → التنفيذ → الدليل يعمل end-to-end.
 
 **Phase 1 — Agent loop**
@@ -508,7 +465,7 @@ GET    /attack-library/{class}     → سيناريوهات معمَّمة جا�
 - **False negatives**: فشل الهجوم لا يعني بالضرورة أن العقد آمن — فقط أن هذا السيناريو المحدد فشل. يجب توثيق هذا بوضوح في أي proof_artifact سلبي.
 - **safe_eval expressiveness**: التوازن بين تعبير قوي بما يكفي للـ success_conditions المعقدة، وآمن بما يكفي لمنع حقن كود — يحتاج تصميم دقيق للغة التعبيرات المسموحة.
 - **تكلفة RPC/fork**: fork من mainnet لكل محاولة قد يكون بطيئاً/مكلفاً — يُستحسن cache للـ fork state محلياً (anvil snapshot/revert بدل fork جديد لكل retry).
-- **توليد عقود Solidity من LLM**: حتى مع Pydantic validation على مستوى الـ scenario، أي كود Solidity مولَّد مباشرة (كـ attacker templates مخصصة) يحتاج مراجعة/compilation check قبل التنفيذ داخل sandbox.
+- **توليد عقود Solidity من LLM**: حتى مع dataclass validation على مستوى الـ scenario، أي كود Solidity مولَّد مباشرة (كـ attacker templates مخصصة) يحتاج مراجعة/compilation check قبل التنفيذ داخل sandbox.
 
 ---
 
