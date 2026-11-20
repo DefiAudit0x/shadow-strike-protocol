@@ -300,18 +300,12 @@ def _build_price_manipulation_scenario(chosen, target_contracts, attacker_initia
             TransactionStep(step_id=1, caller="attacker", target="attacker", function="attack()",
                              value_eth=donation, args=[donation],
                              comment="seed deposit for 1 share, then donate directly to inflate share price"),
-            # the actual exploit signature only shows up once a REAL
-            # depositor interacts post-manipulation — checking total_shares
-            # right after the attack alone doesn't distinguish a resistant
-            # vault from a vulnerable one (both start near-zero); this
-            # victim deposit is what the success condition actually judges.
             TransactionStep(step_id=2, caller="victim", target=primary_alias, function="deposit()",
                              value_eth=1.0, comment="a legitimate user deposits after the manipulation"),
         ],
         success_conditions=[SuccessCondition(
-            expression=f"{primary_alias}.victim_shares < 0.01",
-            description="a legitimate depositor received near-zero shares for a real 1 ETH deposit "
-                        "(classic inflation-attack signature)",
+            expression=f"{primary_alias}.victim_claim_eth < 0.99999999",
+            description="the depositor lost more than 0.00000001 ETH of their 1 ETH redeemable claim",
         )],
     )
 
