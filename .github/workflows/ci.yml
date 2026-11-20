@@ -20,11 +20,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install core dependencies (zero-dep engine)
-        run: pip install -e .
+      - name: Install core and test dependencies
+        run: pip install -e ".[dev]"
 
       - name: Run test suite
-        run: python -m unittest discover -s tests -v
+        run: python -m pytest -v
 
       - name: Run the live end-to-end demo (mock engine)
         run: python examples/run_demo.py
@@ -42,7 +42,7 @@ jobs:
       - name: Install ruff
         run: pip install ruff
       - name: Lint
-        run: ruff check shadow_strike/ --line-length 110
+        run: ruff check shadow_strike/ tests/ --line-length 110
 
   foundry-tests:
     runs-on: ubuntu-latest
@@ -53,8 +53,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.9.0
       - name: Install forge-std
-        run: forge install foundry-rs/forge-std --no-commit
+        run: forge install foundry-rs/forge-std@v1.9.7 --no-git
       - name: Run local (non-fork) Foundry tests
         run: forge test --match-contract VaultReentrancyTest -vvv
 
@@ -74,5 +76,5 @@ jobs:
         run: |
           python -c "import shadow_strike.agent.llm_providers"
           python -c "import shadow_strike.storage.postgres_store"
-          python -c "import shadow_strike.api.main" || echo "api.main needs a live import context — syntax-checked only"
+          python -c "import shadow_strike.api.main"
           python -c "import shadow_strike.agent.graph_langgraph"
