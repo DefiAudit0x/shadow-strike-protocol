@@ -28,7 +28,7 @@ class SandboxLimits:
     memory_bytes: int = 1536 * 1024 * 1024
     max_file_size_bytes: int = 50 * 1024 * 1024  # 50 MB — generated .t.sol / build artifacts
     wall_clock_seconds: int = 30              # backstop in case a process ignores SIGXCPU
-    max_output_bytes: int = 1024 * 1024  # per stream, including truncation marker
+    max_output_bytes: int = 4096  # per stream, including truncation marker
 
 
 def _apply_rlimits(limits: SandboxLimits):
@@ -52,6 +52,7 @@ class SandboxedSubprocess:
 
     def run(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
         start = time.monotonic()
+        usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
         marker = b"\n[output truncated]\n"
         cap = self.limits.max_output_bytes
         if cap < len(marker):
@@ -91,11 +92,18 @@ class SandboxedSubprocess:
                 except ProcessLookupError:
                     pass
                 child.wait()
-            for name in truncated:
-                buffers[name][-len(marker):] = marker
+            outputs = {}
+            for name, buffer in buffers.items():
+                decoded = buffer.decode(errors="replace")
+                encoded = decoded.encode("utf-8")
+                if name in truncated or len(encoded) > cap:
+                    # Ignore only a partial final character when cutting UTF-8.
+                    decoded = encoded[:cap - len(marker)].decode("utf-8", errors="ignore")
+                    decoded += marker.decode("ascii")
+                outputs[name] = decoded
             proc = subprocess.CompletedProcess(
                 cmd, child.returncode,
-                buffers["stdout"].decode(errors="replace"), buffers["stderr"].decode(errors="replace"),
+                outputs["stdout"], outputs["stderr"],
             )
 
         elapsed = time.monotonic() - start
@@ -106,7 +114,15 @@ class SandboxedSubprocess:
                 f"CPU limit ({self.limits.cpu_seconds}s) exceeded after {elapsed:.1f}s wall time"
             )
         if proc.returncode == -signal.SIGKILL:
-            raise SandboxLimitExceeded("process was killed by SIGKILL; cause unknown (CPU, OOM, or external kill)")
+            usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+            cpu_used = (usage_after.ru_utime + usage_after.ru_stime
+                        - usage_before.ru_utime - usage_before.ru_stime)
+            # Linux kills at the hard CPU limit, allowing for accounting granularity.
+            if cpu_used >= self.limits.cpu_seconds - 0.05:
+                raise SandboxLimitExceeded(
+                    f"CPU limit ({self.limits.cpu_seconds}s) exceeded after {elapsed:.1f}s wall time"
+                )
+            raise SandboxLimitExceeded("process was killed by SIGKILL; cause unknown")
         return proc
 
 
