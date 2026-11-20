@@ -236,6 +236,62 @@ class TestEntitlementFollowsEffectiveFunding(unittest.TestCase):
         self.assertEqual(verdict.verdict, "resisted")
 
 
+class TestFloatRoundTripIsNotTheft(unittest.TestCase):
+    """CodeRabbit follow-up on PR #29 (Fix 7c): the strict > comparison
+    between eth_balance_after and legitimate_entitlement treats float
+    rounding residue as theft — a safe 0.3 ETH deposit/withdraw round trip
+    on a 0.9 ETH funding leaves 0.9000000000000001, which then reads
+    verified. The mock must not emit that residue."""
+
+    def _scenario(self, vault_kind, override, deposit):
+        return AttackScenario(
+            vulnerability_class="reentrancy",
+            target_protocol="TestVault",
+            hypothesis="withdraw reenters",
+            attacker=AttackerModel(initial_eth=1.0),
+            initial_state=InitialState(
+                fork_url="https://example/rpc", fork_block=1,
+                target_contracts={"vault": "0xabc"},
+                balances={"vault": 9.0, "attacker": override},
+            ),
+            steps=[
+                TransactionStep(step_id=1, caller="attacker", target="vault",
+                                function="deposit()", value_eth=deposit),
+                TransactionStep(step_id=2, caller="attacker", target="attacker",
+                                function="attack()"),
+            ],
+            success_conditions=[
+                SuccessCondition(
+                    expression="attacker.eth_balance_after > attacker.legitimate_entitlement",
+                    description="attacker ended with more ETH than their starting entitlement",
+                ),
+            ],
+        )
+
+    def test_safe_round_trip_at_0_9_is_not_theft(self):
+        scenario = self._scenario("SafeVault", 0.9, 0.3)
+        result = MockExecutor(
+            contract_kinds={"vault": "SafeVault", "attacker": "ReentrantAttacker"},
+        ).execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertEqual(result.state_vars["attacker"]["eth_balance_after"], 0.9)
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 0.9)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+    def test_positive_theft_still_verifies_with_override(self):
+        scenario = self._scenario("VulnerableVault", 0.9, 0.3)
+        result = MockExecutor(
+            contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"},
+        ).execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertGreater(result.state_vars["attacker"]["eth_balance_after"], 0.9)
+        verdict = Verifier().verify(scenario, result)
+        self.assertTrue(verdict.verified)
+        self.assertEqual(verdict.verdict, "verified")
+
+
 class TestOracleManipulationLive(unittest.TestCase):
     def test_price_manipulation_enables_overborrow(self):
         """Attacker swaps into a thin pool to spike spot price, then
