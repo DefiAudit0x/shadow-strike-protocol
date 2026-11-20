@@ -49,7 +49,8 @@ class TestPriceManipulationLive(unittest.TestCase):
             vulnerability_class="price_manipulation", target_protocol="VaultTest",
             hypothesis="first-depositor donation/inflation attack",
             attacker=AttackerModel(initial_eth=10.0),
-            initial_state=InitialState(fork_url="x", fork_block=1, target_contracts={"vault": "0xdef"}),
+            initial_state=InitialState(fork_url="x", fork_block=1, target_contracts={"vault": "0xdef"},
+                                       balances={"victim": 1.0}),
             steps=[
                 TransactionStep(step_id=1, caller="attacker", target="attacker", function="attack()", value_eth=9.99, args=[9.99]),
                 TransactionStep(step_id=2, caller="victim", target="vault", function="deposit()", value_eth=1.0),

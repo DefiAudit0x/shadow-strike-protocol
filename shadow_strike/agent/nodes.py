@@ -256,7 +256,8 @@ def _build_price_manipulation_scenario(chosen, target_contracts, attacker_initia
         target_protocol=protocol_name,
         hypothesis=chosen["hypothesis"],
         attacker=AttackerModel(initial_eth=attacker_initial_eth),
-        initial_state=InitialState(fork_url=fork_url, fork_block=fork_block, target_contracts=target_contracts),
+        initial_state=InitialState(fork_url=fork_url, fork_block=fork_block, target_contracts=target_contracts,
+                                   balances={"victim": 1.0}),
         steps=[
             TransactionStep(step_id=1, caller="attacker", target="attacker", function="attack()",
                              value_eth=donation, args=[donation],
