@@ -12,13 +12,66 @@ diff a generated .t.sol against the scenario JSON that produced it.
 
 from __future__ import annotations
 
+import math
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from jinja2 import Environment, FileSystemLoader
 
-from shadow_strike.core.models import AttackScenario
+from shadow_strike.core.models import AttackScenario, ShadowStrikeValidationError
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+def _identifier(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value):
+        raise ShadowStrikeValidationError("Invalid Solidity identifier")
+    return value
+
+
+def _comment(value: str) -> str:
+    # Keep all scenario prose on a single source line, including Unicode separators.
+    return " ".join(value.splitlines()).replace("*/", "* /").replace("/*", "/ *")
+
+
+def _string_literal(value: str) -> str:
+    # Encode UTF-8 bytes so even control characters and Unicode remain data.
+    escaped = "".join(
+        chr(byte) if 32 <= byte < 127 and byte not in (34, 92)
+        else f"\\x{byte:02x}" for byte in value.encode("utf-8")
+    )
+    return '"' + escaped + '"'
+
+
+def _argument(value) -> str:
+    if isinstance(value, str):
+        return _string_literal(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if type(value) is int or (type(value) is float and math.isfinite(value)):
+        return str(value)
+    raise ShadowStrikeValidationError("Unsupported Solidity argument type")
+
+
+def _address(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]{40}", value):
+        raise ShadowStrikeValidationError("Expected a 20-byte Solidity address")
+    return value
+
+
+def _fork_url(value: str) -> str:
+    if value == "":
+        return ""  # Explicit local, non-forked mode.
+    if not isinstance(value, str) or any(c.isspace() or ord(c) < 32 or c in "\"'\\" for c in value):
+        raise ShadowStrikeValidationError("fork_url must be an HTTP(S) URL without quotes or whitespace")
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.port == 0:
+            raise ValueError
+    except ValueError as exc:
+        raise ShadowStrikeValidationError("fork_url must be a valid HTTP(S) URL") from exc
+    return _string_literal(value)
 
 
 class ScenarioCompiler:
@@ -60,8 +113,8 @@ class ScenarioCompiler:
 
     def compile_to_file(self, scenario: AttackScenario, out_dir: Path, **kw) -> Path:
         out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
         source = self.compile(scenario, **kw)
+        out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"ShadowStrike_{scenario.scenario_id}.t.sol"
         out_path.write_text(source, encoding="utf-8")
         return out_path
@@ -74,21 +127,33 @@ class ScenarioCompiler:
         attacker_import_path: str | None,
         record_state_diff: bool = True,
     ) -> dict:
+        _identifier(scenario.scenario_id)
+        fork_url = _fork_url(scenario.initial_state.fork_url)
+        if type(scenario.initial_state.fork_block) is not int or scenario.initial_state.fork_block < 0:
+            raise ShadowStrikeValidationError("fork_block must be a nonnegative integer")
+        for amount in [scenario.attacker.initial_eth, *(step.value_eth for step in scenario.steps)]:
+            if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0:
+                raise ShadowStrikeValidationError("ETH amounts must be finite nonnegative numbers")
         import_lines = []
         contract_decls = []
         setup_lines = []
 
         for alias, address in scenario.initial_state.target_contracts.items():
-            sol_type = self.target_types.get(alias, "address")
+            _identifier(alias)
+            _address(address)
+            sol_type = _identifier(self.target_types.get(alias, "address"))
             if sol_type != "address":
                 import_lines.append(f'import {{{sol_type}}} from "../../src/interfaces/{sol_type}.sol";')
             contract_decls.append(f"{sol_type} {alias};")
             setup_lines.append(f"{alias} = {sol_type}({address});")
 
         if attacker_contract_name:
+            _identifier(attacker_contract_name)
             attacker_import_path = (
                 attacker_import_path or f"../../src/attackers/{attacker_contract_name}.sol"
             )
+            if not re.fullmatch(r"[A-Za-z0-9_./-]+\.sol", attacker_import_path):
+                raise ShadowStrikeValidationError("Invalid Solidity import path")
             import_lines.append(
                 f'import {{{attacker_contract_name}}} from "{attacker_import_path}";'
             )
@@ -112,13 +177,18 @@ class ScenarioCompiler:
         if record_state_diff:
             step_lines.append("vm.record();  // forge-std cheatcode — begin tracking SLOAD/SSTORE")
         for step in scenario.steps:
-            fn_name = step.function.split("(")[0]
-            args_str = ", ".join(str(a) for a in step.args)
-            caller_expr = "address(attacker)" if step.caller == "attacker" else step.caller
+            fn_name = _identifier(step.function.split("(")[0])
+            _identifier(step.target)
+            if step.target not in scenario.initial_state.target_contracts and step.target != "attacker":
+                raise ShadowStrikeValidationError("Unknown step target")
+            if type(step.step_id) is not int:
+                raise ShadowStrikeValidationError("step_id must be an integer")
+            args_str = ", ".join(_argument(a) for a in step.args)
+            caller_expr = "address(attacker)" if step.caller == "attacker" else _address(step.caller)
             value_clause = (
                 f"{{value: {step.value_eth} ether}}" if step.value_eth and step.value_eth > 0 else ""
             )
-            step_lines.append(f"// step {step.step_id}" + (f" — {step.comment}" if step.comment else ""))
+            step_lines.append(f"// step {step.step_id}" + (f" — {_comment(step.comment)}" if step.comment else ""))
             if step.expected_revert:
                 step_lines.append("vm.expectRevert();")
             step_lines.append(f"vm.prank({caller_expr});")
@@ -167,8 +237,8 @@ class ScenarioCompiler:
         return {
             "scenario_id": scenario.scenario_id,
             "vulnerability_class": scenario.vulnerability_class.value,
-            "hypothesis": scenario.hypothesis.replace("\n", " "),
-            "fork_url": scenario.initial_state.fork_url,
+            "hypothesis": _comment(scenario.hypothesis),
+            "fork_url": fork_url,
             "fork_block": scenario.initial_state.fork_block,
             "import_lines": import_lines,
             "contract_decls": contract_decls,
