@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
+from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
+from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.scenario_loader import load_scenario_yaml
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.verifier.verifier import Verifier
@@ -49,6 +52,32 @@ class TestFlashLoanComposition(unittest.TestCase):
         low_profit = low_fee_result.state_vars["attacker"]["eth_balance_after"]
         high_profit = high_fee_result.state_vars["attacker"]["eth_balance_after"]
         self.assertGreater(low_profit, high_profit)  # higher fee must mean lower attacker profit
+
+    def test_flash_loan_hypothesis_ends_with_unsupported_verdict(self):
+        source = """
+        contract FlashLoanTarget {
+            function flashLoan(uint256 amount) external {}
+        }
+        """
+        executor = Mock()
+        graph = SimpleShadowStrikeGraph(
+            executor=executor, verifier=Verifier(), library=AttackLibrary(), max_retries=1,
+        )
+
+        result = graph.run(
+            target_contract_source=source,
+            target_protocol_name="FlashLoanTarget",
+            fork_url="", fork_block=0,
+            target_contracts={"target": "0xabc"},
+            attacker_initial_eth=1.0,
+        )
+
+        self.assertIn("flash_loan", [h["vulnerability_class"] for h in result["hypotheses"]])
+        self.assertEqual(result["verdict"], "unsupported_class")
+        self.assertEqual(result["stopped_reason"], "unsupported_class")
+        self.assertIsNone(result["current_scenario"])
+        self.assertNotIn("planner_error", result)
+        executor.execute.assert_not_called()
 
 
 if __name__ == "__main__":

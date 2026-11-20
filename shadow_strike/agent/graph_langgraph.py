@@ -44,10 +44,13 @@ class ShadowStrikeState(TypedDict, total=False):
     current_scenario: Any
     execution_result: Any
     verifier_verdict: Any
+    verdict: str | None
     attempt_count: int
     history: list[dict]
     final_proof: dict | None
     planner_error: str | None
+    planner_detail: str | None
+    stopped_reason: str | None
 
 
 def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries: int = 3,

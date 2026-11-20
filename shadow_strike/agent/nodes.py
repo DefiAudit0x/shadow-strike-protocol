@@ -136,8 +136,8 @@ def hypothesis_node(state: dict, llm_fn: LLMFn | None = None, library: AttackLib
 # Builders are registered per vulnerability_class in SCENARIO_BUILDERS
 # below. Adding a new buildable class = adding one function + one
 # registry entry — nothing else in the planner changes. A class with
-# no registered builder is refused outright (planner_error), never
-# guessed at — see architecture §4.
+# no registered builder receives an explicit unsupported_class verdict;
+# the planner never guesses at a scenario shape — see architecture §4.
 # ---------------------------------------------------------------------
 def _build_reentrancy_scenario(chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
                                 library, protocol_name, state) -> AttackScenario:
@@ -323,10 +323,6 @@ SCENARIO_BUILDERS = {
     VulnerabilityClass.INITIALIZATION.value: _build_initialization_scenario,
     VulnerabilityClass.SIGNATURE_REPLAY.value: _build_signature_replay_scenario,
     VulnerabilityClass.PRICE_MANIPULATION.value: _build_price_manipulation_scenario,
-    # flash_loan is intentionally absent: it composes WITH another class
-    # rather than having its own scenario shape (see meta.yaml
-    # composes_with) — the planner routes a flash-loan-flagged hypothesis
-    # to whichever class it's paired with instead of building standalone.
 }
 
 
@@ -343,6 +339,7 @@ def scenario_planner_node(
     if not state["hypotheses"]:
         state["current_scenario"] = None
         state["planner_error"] = "no hypotheses to plan from"
+        state["verdict"] = "error"
         return state
 
     chosen = state["hypotheses"][0]
@@ -350,12 +347,13 @@ def scenario_planner_node(
     builder = SCENARIO_BUILDERS.get(vuln_class)
 
     if builder is None:
-        # Refuses to guess a scenario shape it has no template for, rather
-        # than emit something that merely *looks* plausible. Intentional —
-        # see architecture §4, "Attack Library metadata and scenario builders":
-        # no builder registered = no scenario, full stop.
+        # Refuse to guess a scenario shape it has no template for. This is
+        # a clean unsupported-class outcome, not a planner failure.
         state["current_scenario"] = None
-        state["planner_error"] = f"no scenario builder registered yet for {vuln_class!r}"
+        state.pop("planner_error", None)
+        state["planner_detail"] = f"no scenario builder registered yet for {vuln_class!r}"
+        state["verdict"] = "unsupported_class"
+        state["stopped_reason"] = "unsupported_class"
         return state
 
     scenario = builder(
@@ -406,6 +404,7 @@ def verifier_node(state: dict, verifier: Verifier | None = None) -> dict:
         return state
     verdict = verifier.verify(scenario, execution_result)
     state["verifier_verdict"] = verdict
+    state["verdict"] = verdict.verdict
     return state
 
 
