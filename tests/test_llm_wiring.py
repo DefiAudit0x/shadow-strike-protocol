@@ -4,6 +4,7 @@ heuristics instead of crashing the run).
 """
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 import tempfile
@@ -134,22 +135,39 @@ class TestCLIAndAPIWiring(unittest.TestCase):
         "API regression requires optional fastapi and httpx dependencies",
     )
     def test_api_run_accepts_llm_field(self):
-        from fastapi.testclient import TestClient
+        import httpx
 
         from shadow_strike.api import main as api
-        from shadow_strike.storage.db import KnowledgeStore
 
         with tempfile.TemporaryDirectory() as tmp:
-            api_store = KnowledgeStore(Path(tmp) / "api.sqlite3")
-            self.addCleanup(api_store.close)
-            with patch.object(api, "store", api_store), TestClient(api.app) as client:
-                response = client.post("/runs", json={
-                    "source_code": _SOURCE, "protocol_name": "LLM API",
-                    "target_contracts": {"vault": "0xdead"},
-                    "engine": "mock", "max_retries": 3, "llm": "echo",
-                })
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertTrue(response.json()["verified"])
+            token = "llm-wiring-test"
+            async def run_api_job():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=api.app), base_url="http://test",
+                ) as client:
+                    response = await client.post("/runs", json={
+                        "source_code": _SOURCE, "protocol_name": "LLM API",
+                        "target_contracts": {"vault": "0xdead"},
+                        "engine": "mock", "max_retries": 3, "llm": "echo",
+                    }, headers={"Authorization": f"Bearer {token}"})
+                    self.assertEqual(response.status_code, 202, response.text)
+                    job_id = response.json()["job_id"]
+                    for _ in range(100):
+                        status = await client.get(
+                            f"/jobs/{job_id}", headers={"Authorization": f"Bearer {token}"},
+                        )
+                        self.assertEqual(status.status_code, 200, status.text)
+                        if status.json()["status"] in ("complete", "failed"):
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertEqual(status.json()["status"], "complete", status.text)
+                    self.assertTrue(status.json()["result"]["verified"])
+
+            with patch.dict(os.environ, {
+                "SHADOW_STRIKE_API_TOKEN": token,
+                "SHADOW_STRIKE_DB_PATH": str(Path(tmp) / "api.sqlite3"),
+            }):
+                asyncio.run(run_api_job())
 
     def test_api_rejects_unknown_llm_provider(self):
         from pydantic import ValidationError
