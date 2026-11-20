@@ -19,7 +19,6 @@ heuristic_source_patterns:
   - pattern: 'delegatecall'
     note: "any delegatecall into attacker-influenced code is a storage-collision risk, not just explicit upgrade functions"
 
-attacker_template: null
 # roadmap — exploiting a storage collision requires knowing the SPECIFIC
 # storage layout mismatch between proxy and malicious implementation,
 # which can't be genericized into one template the way a call-ordering
