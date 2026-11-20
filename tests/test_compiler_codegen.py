@@ -270,3 +270,111 @@ def test_k01_k02_k03_regenerated_artifact_runs_end_to_end(tmp_path):
     assert logs["attacker_eth_before"] == 10 ** 18
     assert logs["attacker_eth_after"] == 37 * 10 ** 17
     assert logs["attacker_eth_after"] - logs["attacker_eth_before"] == 27 * 10 ** 17
+
+
+def test_k11b_address_keyed_balance_seeds_deployed_vault():
+    """11b (CodeRabbit, Minor): a balance keyed by a replaced target's
+    placeholder address must fund the deployed Vault, not the dead
+    placeholder. Fails on the Fix 11 code (the deal goes to 0x1111...)."""
+    data = scenario(
+        scenario_id="k11baddr",
+        initial_state=InitialState(
+            fork_url="", fork_block=0,
+            target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+            balances={"0x1111111111111111111111111111111111111111": 9},
+        ),
+        steps=[TransactionStep(1, "attacker", "vault", "deposit()", value_eth=0.9)],
+    )
+    source = ScenarioCompiler(target_types={"vault": "IVault"}).compile(
+        data, attacker_contract_name="MaliciousReceiver_demo")
+    assert "vm.deal(address(vault), 9 ether);" in source
+    assert "0x1111111111111111111111111111111111111111" not in source
+
+
+def test_k11b_unrelated_caller_keeps_prank():
+    """11b (CodeRabbit, Major): an attack() step whose caller is an
+    unrelated address keeps its configured prank — the call must still
+    fail the receiver's owner check (and an expected_revert scenario
+    must still revert). Fails on the Fix 11 code (the prank is skipped
+    for every attack() call)."""
+    data = scenario(
+        scenario_id="k11bcaller",
+        initial_state=InitialState(
+            fork_url="", fork_block=0,
+            target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+            balances={"vault": 9.0},
+        ),
+        steps=[TransactionStep(
+            1, "0x2222222222222222222222222222222222222222", "attacker", "attack()")],
+    )
+    source = ScenarioCompiler(target_types={"vault": "IVault"}).compile(
+        data, attacker_contract_name="MaliciousReceiver_demo")
+    lines = source.splitlines()
+    attack_at = next(i for i, line in enumerate(lines) if "attacker.attack();" in line)
+    # The configured caller is preserved: the line before attack() is a
+    # prank for the unrelated address (the emitted literal is the
+    # zero-padded form of 0x2222...), not for the receiver.
+    assert "vm.prank" in lines[attack_at - 1]
+    assert "2222222222222222222222222222222222222222" in lines[attack_at - 1]
+    assert "address(attacker)" not in lines[attack_at - 1]
+
+
+def test_k11b_nonzero_value_attack_funded_by_receiver(tmp_path):
+    """11b (CodeRabbit, Major): an attack() step with value must be
+    funded from the receiver's own balance, not the test contract's —
+    the generator splits it into a receiver-funded deposit, then calls
+    attack() with no value. Fails on the Fix 11 code (the value stays
+    on the attack call, which the test contract — holding no ETH —
+    cannot fund, so the forge test reverts)."""
+    if not os.environ.get("FOUNDRY_SOLC"):
+        pytest.skip("needs the Foundry toolchain (FOUNDRY_SOLC)")
+    forge = shutil.which("forge")
+    if forge is None:
+        pytest.skip("forge binary not on PATH")
+    root = Path(__file__).resolve().parents[1]
+    shutil.copytree(root / "contracts/src", tmp_path / "contracts/src")
+    shutil.copy(root / "foundry.toml", tmp_path / "foundry.toml")
+    data = scenario(
+        scenario_id="k11bvalue",
+        attacker=AttackerModel(initial_eth=1.0),
+        initial_state=InitialState(
+            fork_url="", fork_block=0,
+            target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+            balances={"vault": 9.0},
+        ),
+        steps=[TransactionStep(1, "attacker", "attacker", "attack()", value_eth=0.9)],
+        success_conditions=[SuccessCondition(
+            "attacker.eth_balance_after - attacker.eth_balance_before"
+            " > attacker.legitimate_entitlement", "observation",
+        )],
+    )
+    compiler = ScenarioCompiler(target_types={"vault": "IVault"})
+    out = tmp_path / "contracts/test/generated"
+    path = compiler.compile_to_file(data, out, attacker_contract_name="MaliciousReceiver_demo")
+    source = path.read_text()
+    # No value on the attack call itself; the stake is a separate
+    # deposit from the receiver's own balance.
+    assert "attacker.attack{value:" not in source
+    assert "vault.deposit{value: 0.9 ether}();" in source
+    lines = source.splitlines()
+    deposit_at = next(i for i, line in enumerate(lines)
+                      if "vault.deposit{value: 0.9 ether}();" in line)
+    assert "vm.prank(address(attacker));" in lines[deposit_at - 1]
+    run = subprocess.run(
+        [forge, "test", "--root", str(tmp_path), "--offline",
+         "--match-contract", "ShadowStrike_k11bvalue", "-vv"],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    logs = {}
+    for line in run.stdout.splitlines():
+        line = line.strip()
+        for key in ("attacker_eth_before", "attacker_eth_after"):
+            if line.startswith(key + ":"):
+                logs[key] = int(line.split(":", 1)[1].strip())
+    assert set(logs) == {"attacker_eth_before", "attacker_eth_after"}, run.stdout
+    # 1.0 ETH start, 0.9 deposited from the receiver's own balance,
+    # 4 x 0.9 withdrawn: 3.7 after, +2.7 net — no test-contract money.
+    assert logs["attacker_eth_before"] == 10 ** 18
+    assert logs["attacker_eth_after"] == 37 * 10 ** 17
+    assert logs["attacker_eth_after"] - logs["attacker_eth_before"] == 27 * 10 ** 17
