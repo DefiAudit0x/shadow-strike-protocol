@@ -29,6 +29,7 @@ from shadow_strike.core.models import (
     TransactionStep,
     VulnerabilityClass,
 )
+from shadow_strike.execution.foundry_runner import execute_scenario
 from shadow_strike.verifier.verifier import Verifier
 
 LLMFn = Callable[[str], str]   # prompt -> completion; plug in a real model client here
@@ -345,7 +346,7 @@ def executor_node(state: dict, executor) -> dict:
     if scenario is None:
         state["execution_result"] = None
         return state
-    result = executor.execute(scenario) if hasattr(executor, "execute") else executor.run(scenario)
+    result = execute_scenario(executor, scenario)
     state["execution_result"] = result
     return state
 
