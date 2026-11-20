@@ -170,8 +170,7 @@ def cmd_library(args):
     lib = AttackLibrary()
     for vc in lib.available_classes():
         meta = lib.get(vc)
-        has_template = meta.get("attacker_template") is not None
-        print(f"{vc:22s} template={'yes' if has_template else 'no (roadmap)':14s} {meta.get('display_name', '')}")
+        print(f"{vc:22s} {meta.get('display_name', '')}")
 
 
 def cmd_history(args):
