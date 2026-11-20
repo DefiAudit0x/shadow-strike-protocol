@@ -116,6 +116,26 @@ class TestLangGraphFinalization(unittest.TestCase):
         self.assertEqual(state["stopped_reason"], "no hypotheses to plan from")
         self.assertIsNone(state["final_proof"])
 
+    def test_langgraph_attempt_count_matches_executions(self):
+        """Fix 8b (CodeRabbit on PR #30): A09 was incomplete in the
+        LangGraph backend — the critic only runs before a retry, so the
+        first successful execution returned attempt_count 0, and an
+        exhausted run reported 3 for 4 executions."""
+        state = _run_graph(
+            source=self.SOURCE,
+            executor=MockExecutor(contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"}),
+        )
+        self.assertEqual(state["attempt_count"], 1)
+
+    def test_langgraph_exhausted_run_counts_all_executions(self):
+        state = _run_graph(
+            source=self.SOURCE,
+            executor=MockExecutor(contract_kinds={"vault": "SafeVault", "attacker": "ReentrantAttacker"}),
+            max_retries=3,
+        )
+        self.assertEqual(state["attempt_count"], 4)
+        self.assertEqual(state["stopped_reason"], "max_retries (3) exhausted without verification")
+
 
 if __name__ == "__main__":
     unittest.main()

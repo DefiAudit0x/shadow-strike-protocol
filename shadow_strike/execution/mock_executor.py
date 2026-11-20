@@ -499,7 +499,13 @@ class ShareInflationAttacker:
 
     def attack(self, caller: str, world: MockWorld, msg_value: float = 0.0, donation_amount: float | None = None):
         vault = world.contracts[self.vault_alias]
-        vault.deposit(self.alias, world, msg_value=1e-9)  # minimal seed deposit, 1 share
+        # The seed is the demo's smallest asset unit (1e-9 ETH = 1 unit),
+        # but it must never exceed the attacker's declared funds (A05):
+        # with less than 1e-9 ETH the seed is capped at the available
+        # balance (possibly zero, minting no shares) instead of reverting
+        # for insufficient balance.
+        seed = min(1e-9, world.ledger.get(self.alias))
+        vault.deposit(self.alias, world, msg_value=seed)  # minimal seed deposit, 1 share at full funding
         donation_amount = donation_amount if donation_amount is not None else msg_value
         vault.donate(self.alias, world, msg_value=donation_amount)
         world.log(contract=self.alias, fn="attack", caller=caller, donation=donation_amount)

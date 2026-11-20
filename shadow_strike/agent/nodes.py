@@ -401,6 +401,10 @@ def executor_node(state: dict, executor) -> dict:
         return state
     result = execute_scenario(executor, scenario)
     state["execution_result"] = result
+    # Count executed attempts here, in the execution path both backends
+    # share (A09): a first successful execution is attempt 1, and an
+    # exhausted run counts every execution. The critic no longer counts.
+    state["attempt_count"] = state.get("attempt_count", 0) + 1
     return state
 
 
@@ -442,10 +446,6 @@ def _effective_max_retries(state: dict, default: int) -> int:
 def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     verdict = state.get("verifier_verdict")
     execution_result = state.get("execution_result")
-    # SimpleShadowStrikeGraph counts executions itself. Keep the legacy
-    # retry counter for orchestrators that still delegate counting here.
-    if not state.get("_counts_executed_attempts"):
-        state["attempt_count"] = state.get("attempt_count", 0) + 1
 
     reason = "unknown"
     adjustment = None
@@ -460,7 +460,7 @@ def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     if llm_fn is not None:
         try:
             notes = llm_fn(
-                f"Attempt {state['attempt_count']} failed: {reason}. "
+                f"Attempt {state.get('attempt_count', 0)} failed: {reason}. "
                 f"Trace: {execution_result.call_trace if execution_result else 'n/a'}. "
                 "Suggest one concrete scenario adjustment. Reply with exactly one of: "
                 "increase_attacker_eth, increase_max_reentries."
@@ -480,7 +480,7 @@ def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
             adjustment = None
 
     state["history"] = state.get("history", []) + [{
-        "attempt": state["attempt_count"],
+        "attempt": state.get("attempt_count", 0),
         "scenario_id": state["current_scenario"].scenario_id if state.get("current_scenario") else None,
         "reason": reason,
         "adjustment_applied": adjustment,

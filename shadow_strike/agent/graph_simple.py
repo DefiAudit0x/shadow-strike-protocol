@@ -47,7 +47,6 @@ class SimpleShadowStrikeGraph:
             "target_contract_source": target_contract_source,
             "target_protocol_name": target_protocol_name,
             "attempt_count": 0,
-            "_counts_executed_attempts": True,
             "history": [],
         }
 
@@ -81,7 +80,6 @@ class SimpleShadowStrikeGraph:
                 return state
 
             state = executor_node(state, self.executor)
-            state["attempt_count"] += 1
             emit("executor")
 
             state = verifier_node(state, self.verifier)
