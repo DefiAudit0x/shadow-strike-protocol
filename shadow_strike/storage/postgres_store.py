@@ -26,6 +26,7 @@ import uuid
 
 try:
     from sqlalchemy import (
+        CheckConstraint,
         Column,
         Float,
         ForeignKey,
@@ -64,6 +65,7 @@ attempts_table = Table(
     Column("execution_result_json", Text, nullable=True),
     Column("verifier_result_json", Text, nullable=True),
     Column("created_at", Float, nullable=False),
+    CheckConstraint("status IN ('success','failure','error')", name="attempts_status_check"),
 )
 
 proofs_table = Table(
@@ -88,8 +90,11 @@ attack_library_entries_table = Table(
 
 
 class PostgresKnowledgeStore:
-    """Same method signatures as storage.db.KnowledgeStore — see that
-    class's docstrings for what each method does; not repeated here."""
+    """Experimental Postgres drop-in for :class:`KnowledgeStore`.
+
+    The CLI and API currently use SQLite; deployers should validate their
+    SQLAlchemy/driver configuration before adopting this store.
+    """
 
     def __init__(self, connection_url: str):
         """connection_url example:
@@ -177,17 +182,17 @@ def migrate_from_sqlite(sqlite_store, postgres_store: PostgresKnowledgeStore) ->
     reviewed for correctness against both schemas, not executed."""
     counts = {"scenarios": 0, "attempts": 0, "proofs": 0, "attack_library_entries": 0}
 
-    for row in sqlite_store.conn.execute("SELECT * FROM scenarios"):
-        postgres_store.engine.execute(scenarios_table.insert().values(**dict(row)))
-        counts["scenarios"] += 1
-    for row in sqlite_store.conn.execute("SELECT * FROM attempts"):
-        postgres_store.engine.execute(attempts_table.insert().values(**dict(row)))
-        counts["attempts"] += 1
-    for row in sqlite_store.conn.execute("SELECT * FROM proofs"):
-        postgres_store.engine.execute(proofs_table.insert().values(**dict(row)))
-        counts["proofs"] += 1
-    for row in sqlite_store.conn.execute("SELECT * FROM attack_library_entries"):
-        postgres_store.engine.execute(attack_library_entries_table.insert().values(**dict(row)))
-        counts["attack_library_entries"] += 1
+    # SQLAlchemy 2.0 requires statements to execute on a Connection.  One
+    # transaction also ensures a partial migration is never committed.
+    with postgres_store.engine.begin() as connection:
+        for table_name, table in (
+            ("scenarios", scenarios_table),
+            ("attempts", attempts_table),
+            ("proofs", proofs_table),
+            ("attack_library_entries", attack_library_entries_table),
+        ):
+            for row in sqlite_store.conn.execute(f"SELECT * FROM {table_name}"):
+                connection.execute(table.insert().values(**dict(row)))
+                counts[table_name] += 1
 
     return counts
