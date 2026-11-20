@@ -3,9 +3,10 @@ import unittest
 from unittest.mock import patch
 
 from test_benchmark import MULTI_VULN_SOURCE
+from test_pipeline import _make_scenario
 
 from shadow_strike.benchmark.runner import BenchmarkReport, ClassResult, run_benchmark
-from shadow_strike.core.models import AttackScenario, ExecutionResult
+from shadow_strike.core.models import AttackScenario, ExecutionResult, SuccessCondition
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.integrations.axiom_adapter import SentinelHypothesisRequest, handle_sentinel_request
 from shadow_strike.reporting.report_generator import generate_finding_markdown
@@ -13,6 +14,27 @@ from shadow_strike.verifier.verifier import Verifier
 
 
 class TestVerdictSemantics(unittest.TestCase):
+    def test_execution_evidence_must_match_scenario_id(self):
+        scenario = _make_scenario()
+        scenario.success_conditions = [SuccessCondition('x == 1', 'x must equal one')]
+        unrelated = ExecutionResult(
+            scenario_id='UNRELATED', reverted=False, revert_reason=None,
+            state_vars={'x': 1}, state_diff={}, call_trace=[], engine='mock',
+        )
+
+        mismatch = Verifier().verify(scenario, unrelated)
+        self.assertFalse(mismatch.verified)
+        self.assertEqual(mismatch.verdict, 'error')
+        self.assertIn('scenario_id mismatch', mismatch.proof_artifact['error'])
+        self.assertIn('scenario_id mismatch', mismatch.condition_results[0]['error'])
+        self.assertNotIn('state_vars', mismatch.proof_artifact)
+
+        matching = ExecutionResult(
+            scenario_id=scenario.scenario_id, reverted=False, revert_reason=None,
+            state_vars={'x': 1}, state_diff={}, call_trace=[], engine='mock',
+        )
+        self.assertTrue(Verifier().verify(scenario, matching).verified)
+
     def test_zero_tested_has_no_ratio(self):
         for rows in ([], [ClassResult('reentrancy', 'no_executor')],
                      [ClassResult('reentrancy', 'build_error')]):
