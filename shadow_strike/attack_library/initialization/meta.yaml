@@ -14,6 +14,4 @@ default_success_conditions: []
 heuristic_source_patterns:
   - pattern: 'function initialize('
     note: "check for the `initializer` modifier AND that every parent contract in the inheritance chain is also guarded"
-  - pattern: '_disableInitializers'
-    note: "good sign if present in the constructor of an implementation contract — absence is the flag, not the presence"
 
