@@ -61,6 +61,100 @@ def _make_scenario(**overrides):
 
 
 class TestScenarioValidation(unittest.TestCase):
+    def test_c01_invalid_numeric_state_rejected(self):
+        constructors = {
+            "initial_eth": lambda value: AttackerModel(initial_eth=value),
+            "initial_tokens": lambda value: AttackerModel(initial_tokens={"token": value}),
+            "value_eth": lambda value: TransactionStep(1, "attacker", "vault", "deposit()", value_eth=value),
+            "step_id": lambda value: TransactionStep(value, "attacker", "vault", "deposit()"),
+            "fork_block": lambda value: InitialState("", value, {"vault": "0xabc"}),
+            "balances": lambda value: InitialState("", 1, {"vault": "0xabc"}, {"vault": value}),
+            "max_retries": lambda value: _make_scenario(max_retries=value),
+            "attacker_max_reentries": lambda value: _make_scenario(attacker_max_reentries=value),
+        }
+        for name, construct in constructors.items():
+            for value in (float("nan"), float("inf"), -float("inf"), "1", None, [], {}, True):
+                with self.subTest(field=name, value=value), self.assertRaises(ShadowStrikeValidationError):
+                    construct(value)
+            if name != "step_id":
+                with self.subTest(field=name, value=-1), self.assertRaises(ShadowStrikeValidationError):
+                    construct(-1)
+            if name in ("step_id", "fork_block", "max_retries", "attacker_max_reentries"):
+                for value in (1.5, 1.0):
+                    with self.subTest(field=name, value=value), self.assertRaises(ShadowStrikeValidationError):
+                        construct(value)
+            construct(0)
+            construct(1)
+
+    def test_c01_balance_containers_must_be_mappings(self):
+        for value in (None, [], "1"):
+            with self.subTest(value=value), self.assertRaises(ShadowStrikeValidationError):
+                AttackerModel(initial_tokens=value)
+            with self.subTest(value=value), self.assertRaises(ShadowStrikeValidationError):
+                InitialState("", 1, {"vault": "0xabc"}, balances=value)
+
+    def test_c01_json_never_emits_nonfinite_numbers(self):
+        for value in (float("nan"), float("inf"), -float("inf")):
+            for location in ("balance", "args"):
+                scenario = _make_scenario()
+                if location == "balance":
+                    scenario.attacker.initial_eth = value
+                else:
+                    scenario.steps[0].args = [{"nested": [value]}]
+                for options in ({}, {"allow_nan": True}):
+                    with (self.subTest(value=value, location=location, options=options),
+                          self.assertRaises(ShadowStrikeValidationError)):
+                        scenario.to_json(**options)
+
+    def test_c02_malformed_signature_shapes_rejected(self):
+        for signature in ("f(()", "f())", "f(,)", "f(uint256,)", "f(,uint256)",
+                          "f(uint256,,address)", "1f()", "f()junk", "f(uint256[)",
+                          "f(uint256 address)", "f(())", None, 1):
+            with self.subTest(signature=signature), self.assertRaises(ShadowStrikeValidationError):
+                TransactionStep(1, "attacker", "vault", signature)
+
+    def test_c02_valid_signature_shapes_preserved(self):
+        for signature in ("f()", "withdraw(uint256)", "f(address,uint256)",
+                          "f(bytes32[],uint256[2])", "f((address,uint256)[],bytes)",
+                          "f(((uint256,bool),bytes32)[2][],address)"):
+            with self.subTest(signature=signature):
+                TransactionStep(1, "attacker", "vault", signature)
+
+    def test_c03_nonstring_success_condition_rejected(self):
+        for expression in (1, None, [], {}, True):
+            with self.subTest(expression=expression), self.assertRaisesRegex(
+                ShadowStrikeValidationError, "expression must be a string"
+            ):
+                SuccessCondition(expression, "invalid")
+
+    def test_c04_invalid_vulnerability_class_rejected(self):
+        for value in ("invalid", None, 1, [], {}):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ShadowStrikeValidationError, "invalid vulnerability_class"
+            ):
+                _make_scenario(vulnerability_class=value)
+
+    def test_c05_missing_required_fields_reported(self):
+        for name in ("attacker", "initial_state", "steps", "success_conditions"):
+            data = _make_scenario().to_dict()
+            del data[name]
+            with self.subTest(field=name), self.assertRaisesRegex(
+                ShadowStrikeValidationError, f"missing required field: {name}"
+            ):
+                AttackScenario.from_dict(data)
+
+    def test_c05_invalid_nested_structure_wrapped(self):
+        for field in ("attacker", "initial_state", "steps", "success_conditions"):
+            for value in (None, 1, "invalid", [1], {"unknown": 1}):
+                data = _make_scenario().to_dict()
+                data[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ShadowStrikeValidationError):
+                    AttackScenario.from_dict(data)
+        data = _make_scenario().to_dict()
+        data["attacker"]["unknown"] = 1
+        with self.assertRaises(ShadowStrikeValidationError):
+            AttackScenario.from_dict(data)
+
     def test_valid_scenario_constructs(self):
         s = _make_scenario()
         self.assertEqual(s.vulnerability_class.value, "reentrancy")
