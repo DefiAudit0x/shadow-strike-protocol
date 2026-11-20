@@ -38,6 +38,8 @@ class ForgeRunner:
         # These host resource limits do not restrict filesystem or network access.
         self.sandbox = SandboxedSubprocess(sandbox_limits or SandboxLimits(
             cpu_seconds=timeout_seconds, wall_clock_seconds=timeout_seconds + 10,
+            # The sandbox defaults to 4096 bytes per stream.
+            # Give Forge 1 MiB per stream to avoid truncating its JSON output.
             max_output_bytes=1024 * 1024,
         ))
         if shutil.which("forge") is None:
