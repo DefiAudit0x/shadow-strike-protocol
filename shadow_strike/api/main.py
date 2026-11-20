@@ -1,24 +1,23 @@
-"""
-shadow_strike.api.main
-========================
-Orchestration API. Requires: pip install fastapi uvicorn
+"""HTTP API for Shadow Strike.
 
-Run: uvicorn shadow_strike.api.main:app --reload
-
-This is intentionally thin — it exists to expose the same
-SimpleShadowStrikeGraph / KnowledgeStore used by the CLI over HTTP +
-WebSocket, for a dashboard or CI integration. Not required to use
-Shadow Strike at all (the CLI and examples/run_demo.py need nothing
-beyond the stdlib + jinja2 + pyyaml).
+Run with ``uvicorn shadow_strike.api.main:app``. Mutating requests require a
+configured bearer token and return a job ID; clients poll ``GET /jobs/{job_id}``
+for completion. SQLite storage is opened only when a request uses it.
 """
 
 from __future__ import annotations
 
+import hmac
+import os
+import uuid
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from threading import Lock
 from typing import Literal
 
 try:
-    from fastapi import FastAPI, WebSocket
-    from pydantic import BaseModel
+    from fastapi import Depends, FastAPI, Header, HTTPException
+    from pydantic import BaseModel, Field
 except ImportError as e:
     raise ImportError(
         "shadow_strike.api requires: pip install fastapi uvicorn pydantic. "
@@ -31,52 +30,75 @@ from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.benchmark.runner import run_benchmark
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.integrations.axiom_adapter import SentinelHypothesisRequest, handle_sentinel_request
-from shadow_strike.storage.db import KnowledgeStore
-from shadow_strike.storage.persistence import save_run
+from shadow_strike.storage.persistence import run_store, save_run
 from shadow_strike.verifier.verifier import Verifier
 
+API_TOKEN_ENV = "SHADOW_STRIKE_API_TOKEN"
+DB_PATH_ENV = "SHADOW_STRIKE_DB_PATH"
+
 app = FastAPI(title="Shadow Strike Protocol API")
-store = KnowledgeStore(db_path="shadow_strike_knowledge.sqlite3")
 library = AttackLibrary()
 
-
-class RunRequest(BaseModel):
-    source_code: str
-    protocol_name: str
-    target_contracts: dict[str, str]
-    fork_url: str = ""
-    fork_block: int = 0
-    attacker_initial_eth: float = 1.0
-    engine: str = "mock"   # "mock" | "foundry"
-    max_retries: int = 3
-    # Part 10: LLM provider for hypothesis generation ("echo" is the
-    # offline test double; "anthropic" reads its key from the server env).
-    # None means heuristics only.
-    llm: Literal["anthropic", "echo"] | None = None
+# This queue is process-local. The bounded worker pool keeps requests from
+# blocking while still limiting concurrent host executions.
+_job_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="shadow-strike-api")
+_jobs: dict[str, Future] = {}
+_jobs_lock = Lock()
 
 
-@app.get("/attack-library")
-def list_attack_library():
-    return [library.get(vc) for vc in library.available_classes()]
+async def require_bearer_token(authorization: str | None = Header(default=None)) -> None:
+    """Require a configured API secret for operations that can start work."""
+    expected = os.environ.get(API_TOKEN_ENV)
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail=f"API mutations are disabled; configure {API_TOKEN_ENV}.",
+        )
+
+    scheme, separator, supplied = (authorization or "").partition(" ")
+    if not separator or scheme.lower() != "bearer" or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="A valid bearer token is required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
-@app.get("/attack-library/{vulnerability_class}")
-def get_attack_library_entries(vulnerability_class: str):
-    rows = store.library_entries(vulnerability_class)
-    return [dict(r) for r in rows]
+def _configured_db_path() -> str:
+    return os.environ.get(DB_PATH_ENV, "shadow_strike_knowledge.sqlite3")
 
 
-@app.post("/runs")
-def create_run(req: RunRequest):
+def _reject_fork_url(fork_url: str) -> None:
+    """API-triggered Foundry jobs cannot access arbitrary RPC endpoints."""
+    if fork_url:
+        raise HTTPException(
+            status_code=400,
+            detail="fork_url is disabled for API jobs; submit an empty value.",
+        )
+
+
+def _queue_job(work: Callable[[], dict]) -> dict[str, str]:
+    job_id = uuid.uuid4().hex
+    future = _job_executor.submit(work)
+    with _jobs_lock:
+        _jobs[job_id] = future
+    return {"job_id": job_id, "status": "queued"}
+
+
+def _execute_run(req: RunRequest) -> dict:
     if req.engine == "foundry":
         from shadow_strike.execution.foundry_runner import ForgeRunner
+
         executor = ForgeRunner(foundry_project_root=".")
     else:
         kinds = {next(iter(req.target_contracts)): "VulnerableVault", "attacker": "ReentrantAttacker"}
         executor = MockExecutor(contract_kinds=kinds)
 
     graph = SimpleShadowStrikeGraph(
-        executor=executor, verifier=Verifier(), library=library, max_retries=req.max_retries,
+        executor=executor,
+        verifier=Verifier(),
+        library=library,
+        max_retries=req.max_retries,
         llm_fn=build_llm_fn(req.llm),
     )
     result = graph.run(
@@ -90,16 +112,15 @@ def create_run(req: RunRequest):
 
     scenario = result.get("current_scenario")
     if scenario is not None:
-        # Sync endpoints run in a worker thread; the module-level SQLite
-        # connection belongs to the importing thread, so use a local one.
-        run_store = KnowledgeStore(db_path=store.db_path)
-        try:
+        with run_store(db_path=_configured_db_path()) as active_store:
             save_run(
-                run_store, scenario, result.get("execution_result"), result.get("verifier_verdict"),
-                attempt_number=result["attempt_count"], failure_reason=result["stopped_reason"],
+                active_store,
+                scenario,
+                result.get("execution_result"),
+                result.get("verifier_verdict"),
+                attempt_number=result["attempt_count"],
+                failure_reason=result["stopped_reason"],
             )
-        finally:
-            run_store.close()
 
     return {
         "scenario_id": scenario.scenario_id if scenario else None,
@@ -110,100 +131,166 @@ def create_run(req: RunRequest):
     }
 
 
-@app.get("/runs/{scenario_id}")
-def get_run(scenario_id: str):
-    rows = store.attempts_for_scenario(scenario_id)
-    return [dict(r) for r in rows]
-
-
 def _build_mock_executors(executor_config: dict[str, dict]) -> dict[str, MockExecutor]:
-    """executor_config: {vulnerability_class: {"contract_kinds": {...}, "contract_params": {...}}}
-    — the caller decides which mock contracts model each class, since
-    that's inherently scenario-shape-specific (see benchmark.runner's
-    own docstring: one generic mock world can't cover every class)."""
-    out = {}
-    for vuln_class, cfg in executor_config.items():
-        out[vuln_class] = MockExecutor(
-            contract_kinds=cfg.get("contract_kinds", {}),
-            contract_params=cfg.get("contract_params", {}),
+    """Build class-specific mocks from caller-provided executor configuration."""
+    return {
+        vulnerability_class: MockExecutor(
+            contract_kinds=config.get("contract_kinds", {}),
+            contract_params=config.get("contract_params", {}),
         )
-    return out
+        for vulnerability_class, config in executor_config.items()
+    }
+
+
+class RunRequest(BaseModel):
+    source_code: str
+    protocol_name: str
+    target_contracts: dict[str, str]
+    fork_url: str = ""
+    fork_block: int = 0
+    attacker_initial_eth: float = 1.0
+    engine: str = "mock"  # "mock" | "foundry"
+    max_retries: int = 3
+    # None means heuristics only; the server-side Anthropic key comes from its environment.
+    llm: Literal["anthropic", "echo"] | None = None
 
 
 class BenchmarkRequest(BaseModel):
     source_code: str
     protocol_name: str
     target_contracts: dict[str, str]
-    executor_config: dict[str, dict] = {}   # see _build_mock_executors
+    executor_config: dict[str, dict] = Field(default_factory=dict)
     attacker_initial_eth: float = 1.0
     fork_url: str = ""
     fork_block: int = 0
 
 
-@app.post("/benchmark")
-def create_benchmark(req: BenchmarkRequest):
-    """Idea #4: score a contract against every Attack Library class the
-    heuristics flag as plausible, independently. See
-    shadow_strike.benchmark.runner for the full scorecard semantics."""
-    executors = _build_mock_executors(req.executor_config)
+class SentinelRequest(BaseModel):
+    """HTTP boundary for the Axiom/Sentinel integration."""
+
+    request_id: str
+    target_protocol: str
+    source_code: str
+    target_contracts: dict[str, str]
+    suspected_vulnerability_class: str | None = None
+    executor_config: dict[str, dict] = Field(default_factory=dict)
+    attacker_initial_eth: float = 1.0
+    fork_url: str = ""
+    fork_block: int = 0
+
+
+@app.get("/attack-library")
+async def list_attack_library():
+    # ``_dir`` is useful internally for loading metadata but is a server path,
+    # so keep it out of the public API representation.
+    entries = []
+    for vulnerability_class in library.available_classes():
+        entry = dict(library.get(vulnerability_class))
+        entry.pop("_dir", None)
+        entries.append(entry)
+    return entries
+
+
+@app.get("/attack-library/{vulnerability_class}")
+async def get_attack_library_entries(vulnerability_class: str):
+    with run_store(db_path=_configured_db_path()) as active_store:
+        rows = active_store.library_entries(vulnerability_class)
+        return [dict(row) for row in rows]
+
+
+@app.post("/runs", status_code=202, dependencies=[Depends(require_bearer_token)])
+async def create_run(req: RunRequest):
+    _reject_fork_url(req.fork_url)
+    return _queue_job(lambda: _execute_run(req))
+
+
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_bearer_token)])
+async def get_job(job_id: str):
+    with _jobs_lock:
+        future = _jobs.get(job_id)
+    if future is None:
+        raise HTTPException(status_code=404, detail="Unknown job id.")
+
+    if not future.done():
+        return {"job_id": job_id, "status": "running" if future.running() else "queued"}
+    try:
+        return {"job_id": job_id, "status": "complete", "result": future.result()}
+    except Exception as exc:  # noqa: BLE001 — report worker failures through the job result
+        return {"job_id": job_id, "status": "failed", "error": str(exc)}
+
+
+@app.get("/runs/{scenario_id}")
+async def get_run(scenario_id: str):
+    with run_store(db_path=_configured_db_path()) as active_store:
+        rows = active_store.attempts_for_scenario(scenario_id)
+        return [dict(row) for row in rows]
+
+
+def _execute_benchmark(req: BenchmarkRequest) -> dict:
     report = run_benchmark(
         target_contract_source=req.source_code,
         target_protocol_name=req.protocol_name,
         target_contracts=req.target_contracts,
-        executors=executors,
-        fork_url=req.fork_url, fork_block=req.fork_block,
-        attacker_initial_eth=req.attacker_initial_eth, library=library, db_path=store.db_path,
+        executors=_build_mock_executors(req.executor_config),
+        fork_url=req.fork_url,
+        fork_block=req.fork_block,
+        attacker_initial_eth=req.attacker_initial_eth,
+        library=library,
+        db_path=_configured_db_path(),
     )
     return {
         "target_protocol": report.target_protocol,
         "hypotheses_flagged": report.hypotheses_flagged,
         "results": [
             {
-                "vulnerability_class": r.vulnerability_class, "status": r.status,
-                "scenario_id": r.scenario_id, "detail": r.detail,
-                "proof_artifact": r.proof_artifact,
-            } for r in report.results
+                "vulnerability_class": result.vulnerability_class,
+                "status": result.status,
+                "scenario_id": result.scenario_id,
+                "detail": result.detail,
+                "proof_artifact": result.proof_artifact,
+            }
+            for result in report.results
         ],
         "scorecard_text": report.scorecard(),
     }
 
 
-class SentinelRequest(BaseModel):
-    """Idea #2: the Axiom/Sentinel integration boundary, over HTTP —
-    the same contract as integrations.axiom_adapter.handle_sentinel_request,
-    for when Axiom and Shadow Strike run as separate services rather
-    than sharing a Python runtime."""
-    request_id: str
-    target_protocol: str
-    source_code: str
-    target_contracts: dict[str, str]
-    suspected_vulnerability_class: str | None = None
-    executor_config: dict[str, dict] = {}
-    attacker_initial_eth: float = 1.0
-    fork_url: str = ""
-    fork_block: int = 0
+@app.post("/benchmark", status_code=202, dependencies=[Depends(require_bearer_token)])
+async def create_benchmark(req: BenchmarkRequest):
+    """Queue a benchmark; poll its job ID rather than holding the request open."""
+    _reject_fork_url(req.fork_url)
+    return _queue_job(lambda: _execute_benchmark(req))
 
 
-@app.post("/sentinel/hypothesis")
-def sentinel_hypothesis(req: SentinelRequest):
-    executors = _build_mock_executors(req.executor_config)
+def _execute_sentinel(req: SentinelRequest) -> dict:
     sentinel_req = SentinelHypothesisRequest(
-        request_id=req.request_id, target_protocol=req.target_protocol, source_code=req.source_code,
-        target_contracts=req.target_contracts, suspected_vulnerability_class=req.suspected_vulnerability_class,
-        attacker_initial_eth=req.attacker_initial_eth, fork_url=req.fork_url, fork_block=req.fork_block,
+        request_id=req.request_id,
+        target_protocol=req.target_protocol,
+        source_code=req.source_code,
+        target_contracts=req.target_contracts,
+        suspected_vulnerability_class=req.suspected_vulnerability_class,
+        attacker_initial_eth=req.attacker_initial_eth,
+        fork_url=req.fork_url,
+        fork_block=req.fork_block,
     )
-    resp = handle_sentinel_request(sentinel_req, executors, library, db_path=store.db_path)
+    response = handle_sentinel_request(
+        sentinel_req,
+        _build_mock_executors(req.executor_config),
+        library,
+        db_path=_configured_db_path(),
+    )
     return {
-        "request_id": resp.request_id, "verified": resp.verified, "severity": resp.severity,
-        "scenario_id": resp.scenario_id, "tested_classes": resp.tested_classes,
-        "recommendation": resp.recommendation, "proof_artifact": resp.proof_artifact,
+        "request_id": response.request_id,
+        "verified": response.verified,
+        "severity": response.severity,
+        "scenario_id": response.scenario_id,
+        "tested_classes": response.tested_classes,
+        "recommendation": response.recommendation,
+        "proof_artifact": response.proof_artifact,
     }
 
 
-@app.websocket("/runs/{scenario_id}/stream")
-async def stream_run(websocket: WebSocket, scenario_id: str):
-    """Live node-by-node progress, for a dashboard — mirrors the
-    `on_step` callback SimpleShadowStrikeGraph.run() already accepts."""
-    await websocket.accept()
-    await websocket.send_json({"info": "streaming not yet wired to a background job queue — see roadmap §Phase 2"})
-    await websocket.close()
+@app.post("/sentinel/hypothesis", status_code=202, dependencies=[Depends(require_bearer_token)])
+async def sentinel_hypothesis(req: SentinelRequest):
+    _reject_fork_url(req.fork_url)
+    return _queue_job(lambda: _execute_sentinel(req))

@@ -5,6 +5,7 @@ not compile Solidity or establish EVM correctness (covered by later parts).
 """
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -144,27 +145,44 @@ class TestFoundryProductionPath(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("fastapi") and importlib.util.find_spec("httpx"),
                          "API regression requires optional fastapi and httpx dependencies")
     def test_post_runs_engine_foundry(self):
-        from fastapi.testclient import TestClient
+        import httpx
 
         api_store = KnowledgeStore(self.root / "api.sqlite3")
         self.addCleanup(api_store.close)
+        environment = patch.dict(os.environ, {
+            "SHADOW_STRIKE_API_TOKEN": "foundry-test-token",
+            "SHADOW_STRIKE_DB_PATH": str(self.root / "api.sqlite3"),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
         previous_cwd = Path.cwd()
         try:
             os.chdir(self.root)
-            # Keep the API's existing import-time database inside the temp project.
-            already_imported = "shadow_strike.api.main" in sys.modules
             from shadow_strike.api import main as api
-            if not already_imported:
-                self.addCleanup(api.store.close)
-            with patch.object(api, "store", api_store), TestClient(api.app) as client:
-                response = client.post("/runs", json={
-                    "source_code": SOURCE, "protocol_name": "Foundry API", "target_contracts": TARGETS,
-                    "engine": "foundry", "max_retries": 0,
-                })
+            async def run_api_job():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=api.app), base_url="http://test",
+                ) as client:
+                    response = await client.post("/runs", json={
+                        "source_code": SOURCE, "protocol_name": "Foundry API", "target_contracts": TARGETS,
+                        "engine": "foundry", "max_retries": 0,
+                    }, headers={"Authorization": "Bearer foundry-test-token"})
+                    self.assertEqual(response.status_code, 202, response.text)
+                    job_id = response.json()["job_id"]
+                    for _ in range(100):
+                        job = await client.get(
+                            f"/jobs/{job_id}", headers={"Authorization": "Bearer foundry-test-token"},
+                        )
+                        self.assertEqual(job.status_code, 200, job.text)
+                        if job.json()["status"] in ("complete", "failed"):
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertEqual(job.json()["status"], "complete", job.text)
+                    return job.json()["result"]
+
+            payload = asyncio.run(run_api_job())
         finally:
             os.chdir(previous_cwd)
-        self.assertEqual(response.status_code, 200, response.text)
-        payload = response.json()
         self.assertTrue(payload["scenario_id"])
         self.assertIn("stopped_reason", payload)
         self.assertIsNotNone(api_store.conn.execute(
