@@ -114,7 +114,8 @@ class TestBuildLLMFn(unittest.TestCase):
 
 class TestCLIAndAPIWiring(unittest.TestCase):
     def test_cli_run_accepts_llm_provider_echo(self):
-        from shadow_strike.cli import cmd_run
+        from shadow_strike import cli
+        from shadow_strike.agent.llm_providers import EchoLLM
 
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "Vault.sol"
@@ -126,8 +127,12 @@ class TestCLIAndAPIWiring(unittest.TestCase):
                 db=str(Path(tmp) / "test.sqlite3"),
                 llm_provider="echo", llm_api_key=None,
             )
-            with self.assertRaises(SystemExit) as ctx:
-                cmd_run(args)
+            with patch.object(cli, "build_llm_fn", wraps=cli.build_llm_fn) as builder, \
+                    patch.object(EchoLLM, "__call__", autospec=True, return_value="") as invoked, \
+                    self.assertRaises(SystemExit) as ctx:
+                cli.cmd_run(args)
+            builder.assert_called_once_with("echo", None)
+            invoked.assert_called()
             self.assertEqual(ctx.exception.code, 0)  # ATTACK VERIFIED
 
     @unittest.skipUnless(
@@ -137,6 +142,7 @@ class TestCLIAndAPIWiring(unittest.TestCase):
     def test_api_run_accepts_llm_field(self):
         import httpx
 
+        from shadow_strike.agent.llm_providers import EchoLLM
         from shadow_strike.api import main as api
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -166,8 +172,11 @@ class TestCLIAndAPIWiring(unittest.TestCase):
             with patch.dict(os.environ, {
                 "SHADOW_STRIKE_API_TOKEN": token,
                 "SHADOW_STRIKE_DB_PATH": str(Path(tmp) / "api.sqlite3"),
-            }):
+            }), patch.object(api, "build_llm_fn", wraps=api.build_llm_fn) as builder, \
+                    patch.object(EchoLLM, "__call__", autospec=True, return_value="") as invoked:
                 asyncio.run(run_api_job())
+            builder.assert_called_once_with("echo")
+            invoked.assert_called()
 
     def test_api_rejects_unknown_llm_provider(self):
         from pydantic import ValidationError

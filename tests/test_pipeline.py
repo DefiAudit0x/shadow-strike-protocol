@@ -429,6 +429,12 @@ class TestMockExecutorAndVerifier(unittest.TestCase):
         result = executor.execute(s)
         verdict = Verifier().verify(s, result)
         self.assertFalse(verdict.verified)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertTrue(result.state_vars)
+        self.assertEqual(verdict.verdict, "resisted")
+        self.assertTrue(verdict.condition_results)
+        self.assertTrue(all(c["error"] is None for c in verdict.condition_results))
+        self.assertLessEqual(result.state_vars["attacker"]["eth_balance_after"], result.state_vars["attacker"]["eth_balance_before"])
 
     def test_mock_engine_stamped_on_result(self):
         s = _make_scenario()

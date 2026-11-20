@@ -55,8 +55,18 @@ class TestEconomicSelfLiquidation(unittest.TestCase):
         scenario = load_scenario_yaml(SCENARIOS_DIR / "economic_self_liquidation_demo.yaml")
         executor = MockExecutor(contract_kinds={"market": "SelfLiquidationMarket"},
                                  contract_params={"market": {"liquidation_bonus_bps": 500.0}})
-        verdict = Verifier().verify(scenario, executor.execute(scenario))
+        result = executor.execute(scenario)
+        verdict = Verifier().verify(scenario, result)
         self.assertFalse(verdict.verified)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertTrue(result.state_vars)
+        self.assertEqual(verdict.verdict, "resisted")
+        self.assertTrue(verdict.condition_results)
+        self.assertTrue(all(c["error"] is None for c in verdict.condition_results))
+        self.assertLessEqual(
+            result.state_vars["attacker"]["eth_balance_after"],
+            result.state_vars["attacker"]["eth_balance_before"],
+        )
 
 
 if __name__ == "__main__":
