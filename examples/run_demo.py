@@ -9,8 +9,8 @@ What this proves, in order:
   3. scenario_planner_node builds a fully-typed, VALIDATED AttackScenario
      (try mutating it into something invalid — it'll reject before step 4)
   4. ScenarioCompiler renders that exact scenario into real Foundry
-     Solidity (written to contracts/test/, ready for `forge test` once
-     you have Foundry + an RPC)
+     Solidity (written to contracts/test/generated/ for a compile-only
+     `forge build` check; no EVM execution is performed)
   5. MockExecutor independently *runs* the same scenario against a
      pure-Python twin of contracts/src/Vault.sol and produces real
      state transitions (no assertion, no guess — an actual balance ledger)
@@ -80,8 +80,8 @@ def main():
     result = graph.run(
         target_contract_source=vault_source,
         target_protocol_name="DemoVault",
-        fork_url="https://eth-mainnet.example/rpc",  # only used by the real ForgeRunner, not MockExecutor
-        fork_block=19_000_000,
+        fork_url="",  # offline, compile-only Foundry output; no RPC needed
+        fork_block=0,
         target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
         attacker_initial_eth=1.0,
         on_step=on_step,
@@ -133,12 +133,10 @@ def main():
         scenario,
         out_dir=ROOT / "contracts/test/generated",
         attacker_contract_name="MaliciousReceiver_demo",
-        attacker_import_path="../src/attackers/MaliciousReceiver_demo.sol",
+        attacker_import_path="../../src/attackers/MaliciousReceiver_demo.sol",
     )
     print(f"written: {out_path.relative_to(ROOT)}")
-    print("(run with real Foundry: forge test --match-contract "
-          f"ShadowStrike_{scenario.scenario_id} --fork-url $MAINNET_RPC_URL "
-          f"--fork-block-number {scenario.initial_state.fork_block} -vvvv)")
+    print(f"(compile only: forge build {out_path.relative_to(ROOT)})")
 
     # ---- re-run the IDENTICAL scenario against the PATCHED contract -----
     section("STEP 9 — re-running the identical scenario against SafeVault (patched)")
