@@ -28,16 +28,16 @@ from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
     InitialState,
-    ShadowStrikeValidationError,
     SuccessCondition,
     TransactionStep,
 )
 
 
 class ScenarioFileError(ValueError):
-    """Raised for YAML structure problems, BEFORE AttackScenario validation
-    runs — keeps 'the YAML is malformed' and 'the scenario is invalid'
-    as distinguishable error classes for tooling/CI to handle differently."""
+    """Raised for YAML syntax, structure, type, and scenario validation errors.
+
+    File I/O errors retain their original exception types.
+    """
 
 
 def load_scenario_yaml(path: str | Path) -> AttackScenario:
@@ -52,7 +52,7 @@ def load_scenario_yaml(path: str | Path) -> AttackScenario:
 
     unknown = raw.keys() - AttackScenario.__dataclass_fields__.keys()
     if unknown:
-        raise ScenarioFileError(f"{path}: unknown top-level field(s): {sorted(unknown)}")
+        raise ScenarioFileError(f"{path}: unknown top-level field(s): {sorted(unknown, key=str)}")
 
     required_top = {"vulnerability_class", "target_protocol", "hypothesis", "initial_state", "steps", "success_conditions"}
     missing = required_top - raw.keys()
@@ -85,7 +85,7 @@ def load_scenario_yaml(path: str | Path) -> AttackScenario:
             max_retries=raw.get("max_retries", 3),
             attacker_max_reentries=raw.get("attacker_max_reentries", 3),
         )
-    except (TypeError, ValueError, ShadowStrikeValidationError) as e:
+    except (TypeError, ValueError, KeyError, AttributeError) as e:
         # TypeError catches "unexpected keyword argument" from a typo'd
         # field name in the YAML — surfaced as a ScenarioFileError too,
         # not a raw Python traceback a researcher has to decode.
