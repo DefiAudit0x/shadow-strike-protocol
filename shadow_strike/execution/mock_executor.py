@@ -23,7 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 
-from shadow_strike.core.models import AttackScenario, ExecutionResult
+from shadow_strike.core.models import AttackScenario, ExecutionResult, ShadowStrikeValidationError
 
 
 class MockRevert(Exception):
@@ -41,7 +41,9 @@ class Ledger:
         return self.balances.get(alias, 0.0)
 
     def move(self, frm: str, to: str, amount: float) -> None:
-        if amount <= 0:
+        if amount < 0:
+            raise ShadowStrikeValidationError("transfer amount must be nonnegative")
+        if amount == 0:
             return
         if self.balances.get(frm, 0.0) < amount:
             raise MockRevert(f"insufficient balance: {frm} has {self.balances.get(frm, 0.0)}, needs {amount}")
@@ -49,7 +51,7 @@ class Ledger:
         self.balances[to] = self.balances.get(to, 0.0) + amount
 
     def transfer(self, frm: str, to: str, amount: float, world: MockWorld) -> None:
-        if amount <= 0:
+        if amount == 0:
             return
         self.move(frm, to, amount)
         # Simulate the EVM calling the recipient's fallback/receive
@@ -69,6 +71,15 @@ class MockWorld:
     def log(self, **kw):
         self.call_trace.append(kw)
 
+    def snapshot(self):
+        """Deep-copy the mutable world state (same shape as run_step's snapshot)."""
+        return (deepcopy(self.ledger), deepcopy(self.token_b_ledger), deepcopy(self.contracts), len(self.call_trace))
+
+    def restore(self, snap):
+        """Restore a snapshot from snapshot(), dropping trace entries the reverted subcall left."""
+        self.ledger, self.token_b_ledger, self.contracts, n = snap
+        del self.call_trace[n:]
+
 
 # ---------------------------------------------------------------------
 # Reference contract models used by the bundled reentrancy demo.
@@ -80,6 +91,8 @@ class MockWorld:
 class VulnerableVault:
     """Mirrors contracts/src/Vault.sol: withdraw() sends ETH, THEN zeroes
     the internal balance — classic checks-effects-interactions violation."""
+
+    abi_signatures = frozenset({"deposit()", "withdraw()"})
 
     def __init__(self, alias: str):
         self.alias = alias
@@ -140,10 +153,17 @@ class ReentrantAttacker:
             # mirrors the Solidity receive() guard: only reenter while the
             # vault still appears to have funds AND we haven't hit the cap
             self.reentry_count += 1
+            snap = world.snapshot()
             try:
                 vault.withdraw(self.alias, world)
             except MockRevert:
-                pass
+                # EVM semantics: a reverted subcall rolls back its own
+                # effects, but the caller's pre-call state (here, the
+                # reentry_count increment above) persists.
+                world.restore(snap)
+                restored = world.contracts.get(self.alias)
+                if restored is not None:
+                    restored.reentry_count = self.reentry_count
 
 
 class MockFlashLender:
@@ -210,10 +230,17 @@ class FlashLoanReentrantAttacker:
         vault = world.contracts[self.vault_alias]
         if self.reentry_count < self.max_reentries and world.ledger.get(self.vault_alias) >= amount:
             self.reentry_count += 1
+            snap = world.snapshot()
             try:
                 vault.withdraw(self.alias, world)
             except MockRevert:
-                pass
+                # Same EVM atomicity as ReentrantAttacker.on_receive: the
+                # reverted subcall's effects roll back, the caller's own
+                # reentry_count increment persists.
+                world.restore(snap)
+                restored = world.contracts.get(self.alias)
+                if restored is not None:
+                    restored.reentry_count = self.reentry_count
 
 
 class InitializableTarget:
@@ -695,10 +722,14 @@ class MockExecutor:
             cls = CONTRACT_REGISTRY[kind]
             params = dict(self.contract_params.get(alias, {}))
             if cls is ReentrantAttacker:
-                target_alias = next(
-                    a for a, k in self.contract_kinds.items()
-                    if k not in ("ReentrantAttacker", "OracleManipulationAttacker")
-                )
+                target_alias = params.get("target_alias")
+                if target_alias is None:
+                    target_alias = next(
+                        a for a, k in self.contract_kinds.items()
+                        if k not in ("ReentrantAttacker", "OracleManipulationAttacker")
+                    )
+                elif target_alias not in self.contract_kinds:
+                    raise ShadowStrikeValidationError(f"unknown reentrancy target: {target_alias}")
                 # Part 9: the scenario carries the critic-adjusted reentry
                 # depth; the default (3) matches AttackScenario's default.
                 world.contracts[alias] = ReentrantAttacker(
@@ -777,10 +808,10 @@ class MockExecutor:
                 ledger.balances.setdefault(alias, contract.reserve_a)
                 world.token_b_ledger.balances[alias] = contract.reserve_b
 
-        before = {a: ledger.get(a) for a in list(world.contracts) + ["attacker"]}
+        def balances():
+            return {a: world.ledger.get(a) for a in list(world.contracts) + ["attacker"]}
 
-        reverted, revert_reason = False, None
-        for step in scenario.initial_state.custom_setup_calls + scenario.steps:
+        def run_step(step):
             # Copy contracts together so a market keeps its reference to the restored pool.
             snapshot = deepcopy((world.ledger, world.token_b_ledger, world.contracts))
             trace_length = len(world.call_trace)
@@ -790,10 +821,30 @@ class MockExecutor:
                 world.ledger, world.token_b_ledger, world.contracts = snapshot
                 del world.call_trace[trace_length:]
                 if not step.expected_revert:
-                    reverted, revert_reason = True, e.reason
-                    break
+                    return e.reason
+                world.log(
+                    contract=step.target, fn=step.function, caller=step.caller,
+                    step_id=step.step_id, outcome="expected_revert", reason=e.reason,
+                )
+            else:
+                if step.expected_revert:
+                    world.ledger, world.token_b_ledger, world.contracts = snapshot
+                    del world.call_trace[trace_length:]
+                    return f"step {step.step_id}: expected revert did not occur"
+            return None
 
-        after = {a: world.ledger.get(a) for a in list(world.contracts) + ["attacker"]}
+        def run_steps(steps):
+            for step in steps:
+                failure = run_step(step)
+                if failure is not None:
+                    return failure
+            return None
+
+        revert_reason = run_steps(scenario.initial_state.custom_setup_calls)
+        before = balances()
+        if revert_reason is None:
+            revert_reason = run_steps(scenario.steps)
+        after = balances()
 
         state_vars = {}
         for alias in set(list(before.keys()) + list(after.keys())):
@@ -817,7 +868,7 @@ class MockExecutor:
 
         return ExecutionResult(
             scenario_id=scenario.scenario_id,
-            reverted=reverted,
+            reverted=revert_reason is not None,
             revert_reason=revert_reason,
             state_vars=state_vars,
             state_diff={"before": before, "after": after},
@@ -831,9 +882,17 @@ class MockExecutor:
         caller = "attacker" if step.caller == "attacker" else step.caller
         if target is None:
             raise MockRevert(f"unknown call target: {step.target}")
+        declared = getattr(target, "abi_signatures", None)
+        if declared is not None:
+            if step.function not in declared:
+                raise ShadowStrikeValidationError(f"{step.target} does not declare {step.function}")
+            if step.args:
+                raise ShadowStrikeValidationError(f"{step.function} takes no ABI arguments")
         method = getattr(target, fn_name, None)
         if method is None:
-            raise MockRevert(f"{step.target} has no mock method {fn_name}()")
+            # A call to a method the mock does not implement is a malformed
+            # scenario, not a revert: it must never satisfy expected_revert.
+            raise ShadowStrikeValidationError(f"{step.target} has no mock method {fn_name}()")
 
         # step.args (positional, matching the real Solidity signature) are
         # mapped onto whatever extra keyword params this mock method
@@ -845,6 +904,8 @@ class MockExecutor:
             import inspect
             params = list(inspect.signature(method).parameters.keys())
             extra_names = [p for p in params if p not in ("self", "caller", "world", "msg_value")]
+            if len(step.args) > len(extra_names):
+                raise ShadowStrikeValidationError(f"too many arguments for {step.function}")
             extra_kwargs = dict(zip(extra_names, step.args))
 
         method(caller, world, msg_value=step.value_eth, **extra_kwargs)

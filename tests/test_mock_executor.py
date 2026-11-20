@@ -4,6 +4,7 @@ from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
     InitialState,
+    ShadowStrikeValidationError,
     SuccessCondition,
     TransactionStep,
 )
@@ -14,7 +15,9 @@ from shadow_strike.execution.mock_executor import (
     ReentrantAttacker,
     SafeVault,
     SimplePool,
+    VulnerableVault,
 )
+from shadow_strike.verifier.verifier import Verifier
 
 
 class TestMockExecutor(unittest.TestCase):
@@ -28,6 +31,98 @@ class TestMockExecutor(unittest.TestCase):
             steps=steps,
             success_conditions=[SuccessCondition("attacker.eth_balance_after >= 0", "Balance is present")],
         )
+
+    def test_negative_transfer_raises_and_zero_transfer_is_a_noop(self):
+        ledger = Ledger({"sender": 2})
+        world = MockWorld(ledger)
+        with self.assertRaises(ShadowStrikeValidationError):
+            ledger.transfer("sender", "recipient", -1, world)
+        ledger.transfer("sender", "recipient", 0, world)
+        self.assertEqual(ledger.balances, {"sender": 2})
+
+    def test_before_snapshot_uses_post_setup_balance(self):
+        scenario = self.scenario([TransactionStep(1, "attacker", "vault", "deposit()", value_eth=1)])
+        scenario.initial_state.custom_setup_calls = [
+            TransactionStep(0, "attacker", "vault", "deposit()", value_eth=3),
+        ]
+        result = MockExecutor({"vault": "SafeVault"}).execute(scenario)
+        self.assertEqual(result.state_diff["before"], {"vault": 3, "attacker": 7})
+        self.assertEqual(result.state_diff["after"], {"vault": 4, "attacker": 6})
+
+    def test_missing_expected_revert_prevents_verification(self):
+        scenario = self.scenario([
+            TransactionStep(1, "attacker", "vault", "deposit()", value_eth=2, expected_revert=True),
+        ])
+        result = MockExecutor({"vault": "SafeVault"}).execute(scenario)
+        self.assertTrue(result.reverted)
+        self.assertIn("expected revert", result.revert_reason)
+        self.assertFalse(Verifier().verify(scenario, result).verified)
+
+    def test_vault_call_rejects_wrong_abi_signature(self):
+        scenario = self.scenario([TransactionStep(1, "attacker", "vault", "deposit(uint256)")])
+        with self.assertRaises(ShadowStrikeValidationError):
+            MockExecutor({"vault": "SafeVault"}).execute(scenario)
+
+    def test_vault_call_rejects_extra_argument(self):
+        scenario = self.scenario([TransactionStep(1, "attacker", "vault", "deposit()", [1])])
+        with self.assertRaises(ShadowStrikeValidationError):
+            MockExecutor({"vault": "SafeVault"}).execute(scenario)
+
+    def test_caught_reentry_revert_rolls_back_partial_writes(self):
+        # E08: SafeVault.withdraw writes deposits=0 BEFORE the transfer; if
+        # the transfer reverts inside a re-entry, the caught revert must
+        # roll the write back (EVM atomicity), while the outer transfer and
+        # the caller's own reentry_count increment persist.
+        vault1 = VulnerableVault("vault1")
+        vault2 = SafeVault("vault2")
+        attacker = ReentrantAttacker("attacker", "vault2", max_reentries=3)
+        world = MockWorld(
+            Ledger({"attacker": 5, "vault1": 10, "vault2": 1.5}),
+            {"vault1": vault1, "vault2": vault2, "attacker": attacker},
+        )
+        vault1.deposits["attacker"] = 1.0
+        vault2.deposits["attacker"] = 2.0
+        vault1.withdraw("attacker", world)
+        # the re-entry's deposits=0 write was rolled back ...
+        self.assertEqual(world.contracts["vault2"].deposits["attacker"], 2.0)
+        # ... the outer transfer was NOT rolled back ...
+        self.assertEqual(world.ledger.get("vault1"), 9.0)
+        self.assertEqual(world.ledger.get("attacker"), 6.0)
+        # ... and the caller's own reentry_count increment persists.
+        self.assertEqual(world.contracts["attacker"].reentry_count, 1)
+
+    def test_reentrancy_target_comes_from_config(self):
+        # E15: the reentrant target is the configured target_alias, not the
+        # first non-attacker contract.
+        steps = [TransactionStep(1, "attacker", "attacker", "attack()", value_eth=1)]
+        kinds = {
+            "vault1": "VulnerableVault",
+            "vault2": "VulnerableVault",
+            "attacker": "ReentrantAttacker",
+        }
+        result = MockExecutor(kinds, {"attacker": {"target_alias": "vault2"}}).execute(
+            self.scenario(steps, {"vault1": 10, "vault2": 10})
+        )
+        self.assertEqual(result.state_vars["vault2"]["eth_balance_before"], 10)
+        self.assertLess(result.state_vars["vault2"]["eth_balance_after"], 10)
+        self.assertEqual(result.state_vars["vault1"]["eth_balance_after"], 10)
+        # control: without the config the first non-attacker contract wins.
+        control = MockExecutor(kinds).execute(self.scenario(steps, {"vault1": 10, "vault2": 10}))
+        self.assertLess(control.state_vars["vault1"]["eth_balance_after"], 10)
+        self.assertEqual(control.state_vars["vault2"]["eth_balance_after"], 10)
+
+    def test_unknown_method_is_validation_error_not_revert(self):
+        # E16 (remainder): a call to a method the mock does not implement is
+        # a malformed scenario, never a revert — it must not satisfy
+        # expected_revert either.
+        scenario = self.scenario([TransactionStep(1, "attacker", "pool", "nonexistent()")])
+        with self.assertRaises(ShadowStrikeValidationError):
+            MockExecutor({"pool": "SimplePool"}).execute(scenario)
+        scenario = self.scenario([
+            TransactionStep(1, "attacker", "pool", "nonexistent()", expected_revert=True)
+        ])
+        with self.assertRaises(ShadowStrikeValidationError):
+            MockExecutor({"pool": "SimplePool"}).execute(scenario)
 
     def test_deposit_and_donation_settle_without_minting_donation_shares(self):
         executor = MockExecutor({"vault": "ERC4626LikeVault"})
@@ -66,7 +161,8 @@ class TestMockExecutor(unittest.TestCase):
         self.assertFalse(result.reverted)
         self.assertIsNone(result.revert_reason)
         self.assertEqual(result.state_diff["after"], {"vault": 2, "attacker": 8})
-        self.assertEqual([entry["fn"] for entry in result.call_trace], ["deposit"])
+        self.assertEqual([entry["fn"] for entry in result.call_trace], ["withdraw()", "deposit"])
+        self.assertEqual(result.call_trace[0]["outcome"], "expected_revert")
 
     def test_revert_restores_pre_step_state_and_trace(self):
         executor = MockExecutor(
