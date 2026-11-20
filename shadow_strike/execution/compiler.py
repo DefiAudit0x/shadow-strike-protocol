@@ -81,11 +81,14 @@ class ScenarioCompiler:
         for alias, address in scenario.initial_state.target_contracts.items():
             sol_type = self.target_types.get(alias, "address")
             if sol_type != "address":
-                import_lines.append(f'import {{{sol_type}}} from "../interfaces/{sol_type}.sol";')
+                import_lines.append(f'import {{{sol_type}}} from "../../src/interfaces/{sol_type}.sol";')
             contract_decls.append(f"{sol_type} {alias};")
             setup_lines.append(f"{alias} = {sol_type}({address});")
 
         if attacker_contract_name:
+            attacker_import_path = (
+                attacker_import_path or f"../../src/attackers/{attacker_contract_name}.sol"
+            )
             import_lines.append(
                 f'import {{{attacker_contract_name}}} from "{attacker_import_path}";'
             )
@@ -145,7 +148,9 @@ class ScenarioCompiler:
             # _extract_state_diff() below gets real slot-level data,
             # not just the ETH-balance emits.
             for alias in scenario.initial_state.target_contracts:
-                emit_lines.append(f"(bytes32[] memory _{alias}Reads, bytes32[] memory _{alias}Writes) = vm.accesses(address({alias}));")
+                emit_lines.append(
+                    f"(, bytes32[] memory _{alias}Writes) = vm.accesses(address({alias}));"
+                )
                 emit_lines.append(f'emit log_named_uint("{alias}_slots_written", _{alias}Writes.length);')
                 emit_lines.append(
                     f"for (uint256 i = 0; i < _{alias}Writes.length; i++) {{ "

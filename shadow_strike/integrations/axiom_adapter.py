@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_node
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.benchmark.runner import BenchmarkReport, run_benchmark
+from shadow_strike.execution.foundry_runner import execute_scenario
 from shadow_strike.verifier.verifier import Verifier
 
 SEVERITY_BY_CLASS = {
@@ -118,7 +119,7 @@ def _handle_single_class(request: SentinelHypothesisRequest, executors, library)
                             "nothing was actually executed, this is NOT a verdict",
         )
 
-    result = executor.execute(scenario) if hasattr(executor, "execute") else executor.run(scenario)
+    result = execute_scenario(executor, scenario)
     verdict = Verifier().verify(scenario, result)
     status = "exploitable" if verdict.verified else "resisted"
 

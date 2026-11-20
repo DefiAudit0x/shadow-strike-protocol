@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 from shadow_strike.core.models import AttackScenario, ExecutionResult
+from shadow_strike.execution.compiler import ScenarioCompiler
 from shadow_strike.execution.sandbox import SandboxedSubprocess, SandboxLimitExceeded, SandboxLimits
 
 # Hard ceiling — a single scenario attempt must never hang the pipeline.
@@ -63,10 +64,12 @@ class ForgeRunner:
           - mount the foundry project read-only except for a scratch
             /tmp the container throws away after the run
         """
+        test_path = Path(test_file).resolve().relative_to(self.root.resolve())
         contract_name = f"ShadowStrike_{scenario.scenario_id}"
         cmd = [
             "forge", "test",
             "--match-contract", contract_name,
+            "--match-path", test_path.as_posix(),
             "--fork-url", scenario.initial_state.fork_url,
             "--fork-block-number", str(scenario.initial_state.fork_block),
             "-vvvv",
@@ -171,3 +174,18 @@ def _nest_eth_vars(flat: dict[str, int]) -> dict:
         else:
             nested[key] = value
     return nested
+
+
+def execute_scenario(executor, scenario: AttackScenario) -> ExecutionResult:
+    """Dispatch mock execution or compile and run a Foundry scenario.
+
+    Keep the compile/run boundary shared by graph, benchmark and adapter
+    callers. Generated files live inside the configured Foundry project,
+    matching the existing run-scenario output directory.
+    """
+    if hasattr(executor, "execute"):
+        return executor.execute(scenario)
+    test_file = ScenarioCompiler().compile_to_file(
+        scenario, out_dir=executor.root / "contracts/test/generated",
+    )
+    return executor.run(scenario, test_file)

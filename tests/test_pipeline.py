@@ -6,7 +6,14 @@ Run: PYTHONPATH=. python3 -m unittest discover -s tests -v
 """
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import unittest
+from argparse import Namespace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
 from shadow_strike.attack_library.registry import AttackLibrary
@@ -19,6 +26,7 @@ from shadow_strike.core.models import (
     TransactionStep,
 )
 from shadow_strike.core.safe_eval import UnsafeExpressionError, safe_eval
+from shadow_strike.core.scenario_loader import save_scenario_yaml
 from shadow_strike.execution.compiler import ScenarioCompiler
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.storage.db import KnowledgeStore
@@ -117,13 +125,88 @@ class TestAttackLibrary(unittest.TestCase):
 
 
 class TestCompiler(unittest.TestCase):
+    def setUp(self):
+        forge = shutil.which("forge") or str(Path.home() / ".foundry/bin/forge")
+        if not Path(forge).is_file():
+            self.skipTest("Foundry is required for Solidity compilation regression tests")
+        solc_override = os.environ.get("FOUNDRY_SOLC")
+        solc = Path(solc_override) if solc_override else Path.home() / ".svm/0.8.19/solc-0.8.19"
+        if not solc.is_file() or not os.access(solc, os.X_OK):
+            self.skipTest("Solc 0.8.19 is required for offline Solidity compilation regression tests")
+        repo = Path(__file__).resolve().parents[1]
+        if not (repo / "lib").is_dir() and "forge-std" not in os.environ.get("FOUNDRY_REMAPPINGS", ""):
+            self.skipTest("forge-std is required for Solidity compilation regression tests")
+        self.forge = forge
+        environment = patch.dict(os.environ, {
+            "PATH": str(Path(forge).parent) + os.pathsep + os.environ["PATH"],
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        shutil.copytree(repo / "contracts/src", self.root / "contracts/src")
+        shutil.copy(repo / "foundry.toml", self.root / "foundry.toml")
+        # Use a standard local installation when present. FOUNDRY_REMAPPINGS
+        # and FOUNDRY_SOLC can also point at externally provisioned dependencies.
+        if (repo / "lib").is_dir():
+            (self.root / "lib").symlink_to(repo / "lib", target_is_directory=True)
+
+    def assert_forge_builds(self, test_path):
+        result = subprocess.run(
+            [self.forge, "build", str(test_path.relative_to(self.root)), "--root", str(self.root), "--offline"],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / "out" / test_path.name).is_dir())
+
     def test_compiles_to_nonempty_solidity(self):
-        s = _make_scenario()
+        s = _make_scenario(initial_state=InitialState(
+            fork_url="https://example/rpc", fork_block=1,
+            target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+        ))
         compiler = ScenarioCompiler(target_types={"vault": "IVault"})
-        source = compiler.compile(s, attacker_contract_name="Mal", attacker_import_path="./Mal.sol")
-        self.assertIn("pragma solidity", source)
-        self.assertIn(s.scenario_id, source)
-        self.assertIn("vm.createSelectFork", source)
+        for fork_url in ("https://example/rpc", ""):
+            with self.subTest(fork_url=fork_url):
+                s.initial_state.fork_url = fork_url
+                test_path = compiler.compile_to_file(
+                    s, self.root / "contracts/test/generated",
+                    attacker_contract_name="MaliciousReceiver_demo",
+                )
+                source = test_path.read_text()
+                self.assertIn("pragma solidity", source)
+                self.assertIn(s.scenario_id, source)
+                self.assertEqual("vm.createSelectFork" in source, bool(fork_url))
+                self.assert_forge_builds(test_path)
+
+    def test_cmd_run_scenario_attack_compiles_before_execution(self):
+        from shadow_strike.cli import cmd_run_scenario
+
+        s = _make_scenario(initial_state=InitialState(
+            fork_url="", fork_block=0,
+            target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+        ))
+        scenario_path = self.root / "scenario.yaml"
+        save_scenario_yaml(s, scenario_path)
+
+        class CompileOnlyBoundary(Exception):
+            """Stop the CLI before any scenario is executed or stored."""
+
+        def compile_only(scenario, test_path):
+            self.assertEqual(scenario.scenario_id, s.scenario_id)
+            source = test_path.read_text()
+            self.assertIn("MaliciousReceiver_demo attacker;", source)
+            self.assertIn("attacker.attack();", source)
+            self.assertNotIn("vm.createSelectFork", source)
+            self.assert_forge_builds(test_path)
+            raise CompileOnlyBoundary
+
+        with (
+            patch("shadow_strike.execution.foundry_runner.ForgeRunner.run", side_effect=compile_only) as run,
+            self.assertRaises(CompileOnlyBoundary),
+        ):
+            cmd_run_scenario(Namespace(file=scenario_path, engine="foundry", foundry_root=str(self.root)))
+        run.assert_called_once()
 
 
 class TestMockExecutorAndVerifier(unittest.TestCase):

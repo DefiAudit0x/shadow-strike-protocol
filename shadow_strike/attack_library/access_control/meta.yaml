@@ -5,11 +5,18 @@ description: >
   its guard, or the guard checks the wrong condition (e.g. tx.origin
   instead of msg.sender, or a role that was never actually granted).
 
+# `{target}` is a placeholder the planner builder substitutes with the
+# scenario's primary target alias — the mock emits per-contract state
+# (last_caller, privileged_state) under that alias, so a literal alias
+# here would only verify when the target happened to be named that way.
+# The previous defaults referenced `attacker.gained_privileged_capability`
+# and `contract.privileged_state_changed_by`, which no executor ever emits
+# (P1-2): every access-control scenario failed to verify by construction.
 default_invariants:
-  - "contract.privileged_state_changed_by == contract.authorized_role_holder"
+  - "{target}.last_caller == 'deployer' or {target}.last_caller == None"
 
 default_success_conditions:
-  - expression: "attacker.gained_privileged_capability == true"
+  - expression: "{target}.last_caller == 'attacker'"
     description: "Attacker successfully invoked a privileged function without authorization"
 
 heuristic_source_patterns:

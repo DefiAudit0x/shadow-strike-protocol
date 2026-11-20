@@ -106,8 +106,15 @@ def cmd_run_scenario(args):
     if args.engine == "foundry":
         from shadow_strike.execution.compiler import ScenarioCompiler
         from shadow_strike.execution.foundry_runner import ForgeRunner
-        compiler = ScenarioCompiler()
-        test_path = compiler.compile_to_file(scenario, out_dir=Path(args.foundry_root or ".") / "contracts/test/generated")
+        # The bundled attacker and interface implement the reentrancy demo.
+        is_reentrancy = scenario.vulnerability_class.value == "reentrancy"
+        primary_target = next(iter(scenario.initial_state.target_contracts))
+        compiler = ScenarioCompiler(target_types={primary_target: "IVault"} if is_reentrancy else None)
+        test_path = compiler.compile_to_file(
+            scenario,
+            out_dir=Path(args.foundry_root or ".") / "contracts/test/generated",
+            attacker_contract_name="MaliciousReceiver_demo" if is_reentrancy else None,
+        )
         print(f"compiled to {test_path}", file=sys.stderr)
         executor = ForgeRunner(foundry_project_root=Path(args.foundry_root or "."))
     else:

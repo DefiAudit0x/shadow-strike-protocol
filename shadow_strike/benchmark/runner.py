@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_node
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import AttackScenario
+from shadow_strike.execution.foundry_runner import execute_scenario
 from shadow_strike.verifier.verifier import Verifier
 
 
@@ -106,7 +107,7 @@ def run_benchmark(
             report.results.append(ClassResult(vuln_class, "no_executor", scenario_id=scenario.scenario_id))
             continue
 
-        result = executor.execute(scenario) if hasattr(executor, "execute") else executor.run(scenario)
+        result = execute_scenario(executor, scenario)
         verdict = verifier.verify(scenario, result)
 
         report.results.append(ClassResult(
