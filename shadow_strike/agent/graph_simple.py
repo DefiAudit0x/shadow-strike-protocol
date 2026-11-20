@@ -94,7 +94,7 @@ class SimpleShadowStrikeGraph:
             # Part 9: the bound is the tighter of the graph's cap and the
             # scenario's own max_retries.
             bound = _effective_max_retries(state, self.max_retries)
-            if state["attempt_count"] >= bound:
+            if state["attempt_count"] > bound:
                 state["final_proof"] = None
                 state["stopped_reason"] = f"max_retries ({bound}) exhausted without verification"
                 return state

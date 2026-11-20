@@ -51,6 +51,16 @@ class ShadowStrikeState(TypedDict, total=False):
     planner_error: str | None
     planner_detail: str | None
     stopped_reason: str | None
+    # Fix 8c: every key a node writes must be declared here. In real
+    # LangGraph a node writes only to declared state channels, so an
+    # undeclared key is silently dropped — before this, _critic_adjustment
+    # never reached the planner and the critic's adjustments (A08) were
+    # dead in this backend.
+    _critic_adjustment: str | None
+    _llm_critic_notes: str | None
+    _llm_hypothesis_notes: str | None
+    _recon_functions: list
+    _recon_sensitive_calls: list
 
 
 def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries: int = 3,
@@ -107,8 +117,11 @@ def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries:
         if verdict is not None and verdict.verified:
             return "success"
         # Part 9: the bound is the tighter of the graph's cap and the
-        # scenario's own max_retries.
-        if state.get("attempt_count", 0) >= _effective_max_retries(state, max_retries):
+        # scenario's own max_retries. The count now reflects executed
+        # attempts (executor_node counts, as in the simple graph), so this
+        # must be `>` like the simple graph — `>=` against the old
+        # critic-lagged count would silently drop one retry.
+        if state.get("attempt_count", 0) > _effective_max_retries(state, max_retries):
             return "give_up"
         return "retry"
 

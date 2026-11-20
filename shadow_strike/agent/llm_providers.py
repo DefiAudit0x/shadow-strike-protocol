@@ -4,11 +4,9 @@ shadow_strike.agent.llm_providers
 Real LLM adapters matching the `LLMFn = Callable[[str], str]` signature
 every node in agent/nodes.py already accepts via `llm_fn=`.
 
-NOT exercised by the test suite or examples/run_demo.py — this module
-makes outbound network calls, which the environment this project was
-developed in has no access to. The code is complete and correct against
-the documented Anthropic Messages API; it needs an ANTHROPIC_API_KEY
-and network access to actually run, which only you can provide.
+Provider/network behavior is covered by mocked tests. Live Anthropic calls
+require an ANTHROPIC_API_KEY and network access; examples/run_demo.py runs
+offline without this provider.
 
 Usage:
     from shadow_strike.agent.llm_providers import AnthropicLLM
@@ -88,8 +86,19 @@ class AnthropicLLM:
             raise LLMProviderError(f"Anthropic API returned HTTP {e.code}: {e.read().decode(errors='replace')}") from e
         except urllib.error.URLError as e:
             raise LLMProviderError(f"could not reach Anthropic API: {e}") from e
+        except (TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            raise LLMProviderError(f"Anthropic API request or response failed: {e}") from e
 
-        text_blocks = [block["text"] for block in payload.get("content", []) if block.get("type") == "text"]
+        if not isinstance(payload, dict) or not isinstance(payload.get("content"), list):
+            raise LLMProviderError(f"unexpected response shape: {payload}")
+        text_blocks = []
+        for block in payload["content"]:
+            if not isinstance(block, dict):
+                raise LLMProviderError(f"unexpected content block: {block}")
+            if block.get("type") == "text":
+                if not isinstance(block.get("text"), str):
+                    raise LLMProviderError(f"unexpected text content: {block}")
+                text_blocks.append(block["text"])
         if not text_blocks:
             raise LLMProviderError(f"unexpected response shape (no text content): {payload}")
         return "\n".join(text_blocks)

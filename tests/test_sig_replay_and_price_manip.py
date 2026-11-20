@@ -96,6 +96,24 @@ class TestPriceManipulationLive(unittest.TestCase):
         vault.deposit("second", world, msg_value=1e-9)
         self.assertEqual(vault.shares_of, {"first": 1_000_000_000, "second": 1_000_000_000})
 
+    def test_tiny_funds_price_manipulation_does_not_fail_for_insufficient_balance(self):
+        """Fix 8b (CodeRabbit on PR #30): the fixed 1e-9 seed deposit inside
+        ShareInflationAttacker.attack() was not capped by the declared funds,
+        so a zero-capital (or sub-1e-9) price-manipulation scenario reverted
+        for insufficient balance instead of executing and reading resisted."""
+        for funds in (0.0, 1e-10):
+            with self.subTest(funds=funds):
+                scenario = self._scenario(initial_eth=funds)
+                executor = MockExecutor(
+                    contract_kinds={"vault": "ERC4626LikeVault", "attacker": "ShareInflationAttacker"},
+                    contract_params={"attacker": {"vault_alias": "vault"}},
+                )
+                result = executor.execute(scenario)
+                self.assertFalse(result.reverted, result.revert_reason)
+                verdict = Verifier().verify(scenario, result)
+                self.assertFalse(verdict.verified)
+                self.assertEqual(verdict.verdict, "resisted")
+
     def test_donation_resistant_vault_protects_victim(self):
         s = self._scenario()
         executor = MockExecutor(

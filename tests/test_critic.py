@@ -55,7 +55,7 @@ class TestCriticRetry(unittest.TestCase):
         # increase_max_reentries adjustment must reach the second attempt.
         self.assertEqual(planner_depths[0], 3)
         self.assertEqual(planner_depths[1], 5)
-        self.assertEqual(result["attempt_count"], 3)
+        self.assertEqual(result["attempt_count"], 4)
 
     def test_executor_uses_scenario_max_reentries(self):
         # Direct proof the scenario field reaches the constructed attacker:
@@ -76,10 +76,10 @@ class TestCriticRetry(unittest.TestCase):
 
     def test_scenario_max_retries_bounds_graph_loop(self):
         # The graph's own cap is loose (10); the scenario's default
-        # max_retries is 3. The loop must stop at 3, proving the scenario
+        # max_retries is 3. The loop must stop after 4 executions, proving the scenario
         # field — not just the graph constructor — bounds the loop.
         result = _run_resisting_graph(graph_max_retries=10)
-        self.assertEqual(result["attempt_count"], 3)
+        self.assertEqual(result["attempt_count"], 4)
         self.assertEqual(result["stopped_reason"], "max_retries (3) exhausted without verification")
 
     def test_critic_does_not_repeat_failed_adjustment(self):
