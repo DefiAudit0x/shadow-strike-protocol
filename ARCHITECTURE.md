@@ -382,12 +382,13 @@ CREATE TABLE attack_library_entries (
 
 ### 2.6 Sandboxing & Isolation (طبقة لم تُذكر سابقاً — ضرورية)
 
-بما أن النظام ينفّذ كود Solidity مولَّد (أحياناً من LLM) عبر `forge test`، هذا تنفيذ كود غير موثوق:
+The host subprocess is the only supported `ForgeRunner` execution path.
+It limits CPU time, address space, file size, and wall time. These limits
+do not isolate filesystem or network access.
 
-- كل تشغيل `forge test` يتم داخل **container معزول** (Docker، بلا شبكة خارجية إلا RPC endpoint المحدد عبر allowlist).
-- حدود موارد صارمة: CPU، ذاكرة، timeout (مثلاً 60 ثانية لكل scenario execution).
-- الـ RPC المستخدم للـ fork يجب أن يكون من مزود معروف (Alchemy/Infura) عبر env var محمي — لا يُسمح للـ scenario بتحديد RPC عشوائي.
-- لا كتابة إلى الـ filesystem خارج مجلد مؤقت خاص بكل run، يُحذف بعد الانتهاء.
+The Docker container is manual-only. `ForgeRunner` does not launch it.
+The [RPC egress allowlist](docker/egress-allowlist-README.md) is aspirational
+and neither the runner nor the Dockerfile enforces it.
 
 ---
 
@@ -473,7 +474,7 @@ GET    /attack-library/{class}     → سيناريوهات معمَّمة جا�
 | Orchestration API | FastAPI | async، WebSocket للـ streaming |
 | Job queue | Celery / Arq (redis-backed) | تشغيل scenarios بالتوازي، retry منطقي |
 | Storage | PostgreSQL + JSONB | بيانات شبه-منظمة (الـ scenarios/proofs) |
-| Sandboxing | Docker (rootless) + seccomp | عزل تنفيذ الكود غير الموثوق |
+| Sandboxing | Host subprocess resource limits | Docker isolation is planned; the container is manual-only |
 | Frontend (لاحقاً) | React + viz لـ call trace / state diff | قراءة بصرية للـ proof |
 
 ---
