@@ -70,6 +70,25 @@ def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries:
     graph.add_node("verifier", lambda s: verifier_node(s, verifier))
     graph.add_node("critic", lambda s: critic_node(s, llm_fn=llm_fn))
 
+    def finalize(state: ShadowStrikeState) -> ShadowStrikeState:
+        scenario = state.get("current_scenario")
+        verdict = state.get("verifier_verdict")
+        if scenario is None:
+            state["final_proof"] = None
+            state["stopped_reason"] = state.get("stopped_reason") or state.get(
+                "planner_error", "no scenario produced"
+            )
+        elif verdict is not None and verdict.verified:
+            state["final_proof"] = verdict.proof_artifact
+            state["stopped_reason"] = "verified"
+        else:
+            bound = _effective_max_retries(state, max_retries)
+            state["final_proof"] = None
+            state["stopped_reason"] = f"max_retries ({bound}) exhausted without verification"
+        return state
+
+    graph.add_node("finalize", finalize)
+
     graph.set_entry_point("recon")
     graph.add_edge("recon", "hypothesis")
     graph.add_edge("hypothesis", "scenario_planner")
@@ -79,7 +98,7 @@ def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries:
 
     graph.add_conditional_edges("scenario_planner", after_planner, {
         "executor": "executor",
-        "stop_no_scenario": END,
+        "stop_no_scenario": "finalize",
     })
     graph.add_edge("executor", "verifier")
 
@@ -94,10 +113,11 @@ def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries:
         return "retry"
 
     graph.add_conditional_edges("verifier", after_verifier, {
-        "success": END,
-        "give_up": END,
+        "success": "finalize",
+        "give_up": "finalize",
         "retry": "critic",
     })
     graph.add_edge("critic", "scenario_planner")
+    graph.add_edge("finalize", END)
 
     return graph.compile()
