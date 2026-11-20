@@ -42,8 +42,10 @@ def test_forge_failure_status_and_reason(tmp_path):
 
 
 def test_sigkill_does_not_guess_oom_or_cpu():
-    with pytest.raises(SandboxLimitExceeded, match="SIGKILL; cause unknown"):
+    with pytest.raises(SandboxLimitExceeded, match="SIGKILL; cause unknown") as failure:
         SandboxedSubprocess().run([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"])
+
+    assert "CPU" not in str(failure.value)
 
 
 def test_cpu_hard_limit_does_not_report_likely_oom():
@@ -52,7 +54,7 @@ def test_cpu_hard_limit_does_not_report_likely_oom():
             sys.executable, "-c", "while True: pass",
         ])
     assert "likely OOM" not in str(failure.value)
-    assert "CPU" in str(failure.value)
+    assert "CPU limit (1s) exceeded" in str(failure.value)
 
 
 def test_timeout_kills_grandchild(tmp_path):
@@ -85,3 +87,37 @@ def test_captured_streams_are_bounded():
     for output in (result.stdout, result.stderr):
         assert len(output.encode()) <= cap
         assert output.endswith("\n[output truncated]\n")
+
+
+def test_default_output_budget():
+    assert SandboxLimits().max_output_bytes == 4096
+
+
+def test_forge_explicit_output_budget(tmp_path):
+    with patch("shutil.which", return_value="forge"):
+        runner = ForgeRunner(tmp_path)
+    assert runner.sandbox.limits.max_output_bytes == 1024 * 1024
+
+
+def test_forge_truncated_json_reports_output_limit(tmp_path):
+    forge = tmp_path / "forge"
+    payload = {"Probe": {"test_results": {"test_probe()": {
+        "status": "Success", "decoded_logs": ["x" * 8192, "balance: 42"],
+    }}}}
+    forge.write_text(f"#!{sys.executable}\nprint({json.dumps(payload)!r})\n")
+    forge.chmod(0o755)
+    with patch.dict(os.environ, {"PATH": str(tmp_path) + os.pathsep + os.environ["PATH"]}):
+        runner = ForgeRunner(tmp_path, sandbox_limits=SandboxLimits(max_output_bytes=4096))
+        result = runner.run(scenario(), tmp_path / "Probe.t.sol")
+    assert result.reverted
+    assert "forge output exceeded the sandbox output limit (4096 bytes)" == result.revert_reason
+
+
+def test_decoded_output_respects_byte_budget():
+    result = SandboxedSubprocess().run([
+        sys.executable, "-c", "import os; os.write(1, b'\\xff' * 4096)",
+    ])
+    assert len(result.stdout.encode("utf-8")) <= 4096
+    marker = "\n[output truncated]\n"
+    assert result.stdout.endswith(marker)
+    assert set(result.stdout.removesuffix(marker)) == {"\ufffd"}
