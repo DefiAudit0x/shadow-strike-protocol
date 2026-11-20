@@ -9,6 +9,7 @@ a meta.yaml + attacker template — nothing in the core engine changes.
 from __future__ import annotations
 
 from pathlib import Path
+
 import yaml
 
 LIBRARY_ROOT = Path(__file__).parent

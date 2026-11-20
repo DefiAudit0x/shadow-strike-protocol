@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from shadow_strike.core.scenario_loader import load_scenario_yaml, save_scenario_yaml, ScenarioFileError
+from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.verifier.verifier import Verifier
 

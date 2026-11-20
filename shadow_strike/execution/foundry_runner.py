@@ -17,11 +17,10 @@ import json
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from shadow_strike.core.models import AttackScenario, ExecutionResult
-from shadow_strike.execution.sandbox import SandboxLimitExceeded, SandboxLimits, SandboxedSubprocess
+from shadow_strike.execution.sandbox import SandboxedSubprocess, SandboxLimitExceeded, SandboxLimits
 
 # Hard ceiling — a single scenario attempt must never hang the pipeline.
 DEFAULT_TIMEOUT_SECONDS = 90

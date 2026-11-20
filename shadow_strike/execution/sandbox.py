@@ -66,6 +66,7 @@ class SandboxedSubprocess:
                 timeout=self.limits.wall_clock_seconds,
                 capture_output=True,
                 text=True,
+                check=False,
                 **kw,
             )
         except subprocess.TimeoutExpired as e:

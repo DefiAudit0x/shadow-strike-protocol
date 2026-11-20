@@ -8,7 +8,11 @@ from __future__ import annotations
 import unittest
 
 from shadow_strike.core.models import (
-    AttackScenario, AttackerModel, InitialState, TransactionStep, SuccessCondition,
+    AttackerModel,
+    AttackScenario,
+    InitialState,
+    SuccessCondition,
+    TransactionStep,
 )
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.verifier.verifier import Verifier
@@ -159,8 +163,8 @@ class TestLLMHookWiring(unittest.TestCase):
     network access — EchoLLM is a real callable, just not a real model."""
 
     def test_echo_llm_gets_invoked_through_the_graph(self):
-        from shadow_strike.agent.llm_providers import EchoLLM
         from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
+        from shadow_strike.agent.llm_providers import EchoLLM
         from shadow_strike.attack_library.registry import AttackLibrary
 
         source = 'contract C { function withdraw() external { msg.sender.call{value: 1}(""); } }'

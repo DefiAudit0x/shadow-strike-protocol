@@ -25,11 +25,11 @@ except ImportError as e:
 
 from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
 from shadow_strike.attack_library.registry import AttackLibrary
-from shadow_strike.execution.mock_executor import MockExecutor
-from shadow_strike.verifier.verifier import Verifier
-from shadow_strike.storage.db import KnowledgeStore
 from shadow_strike.benchmark.runner import run_benchmark
+from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.integrations.axiom_adapter import SentinelHypothesisRequest, handle_sentinel_request
+from shadow_strike.storage.db import KnowledgeStore
+from shadow_strike.verifier.verifier import Verifier
 
 app = FastAPI(title="Shadow Strike Protocol API")
 store = KnowledgeStore(db_path="shadow_strike_knowledge.sqlite3")

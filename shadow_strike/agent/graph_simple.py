@@ -15,8 +15,12 @@ if you want LangGraph's checkpointing / visualization / streaming.
 from __future__ import annotations
 
 from shadow_strike.agent.nodes import (
-    recon_node, hypothesis_node, scenario_planner_node, executor_node,
-    verifier_node, critic_node,
+    critic_node,
+    executor_node,
+    hypothesis_node,
+    recon_node,
+    scenario_planner_node,
+    verifier_node,
 )
 
 

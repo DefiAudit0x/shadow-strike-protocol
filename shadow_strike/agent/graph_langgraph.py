@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 try:
-    from langgraph.graph import StateGraph, END
+    from langgraph.graph import END, StateGraph
 except ImportError as e:
     raise ImportError(
         "graph_langgraph.py requires the `langgraph` package: pip install langgraph. "
@@ -26,8 +26,12 @@ except ImportError as e:
     ) from e
 
 from shadow_strike.agent.nodes import (
-    recon_node, hypothesis_node, scenario_planner_node, executor_node,
-    verifier_node, critic_node,
+    critic_node,
+    executor_node,
+    hypothesis_node,
+    recon_node,
+    scenario_planner_node,
+    verifier_node,
 )
 
 

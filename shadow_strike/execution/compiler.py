@@ -13,6 +13,7 @@ diff a generated .t.sol against the scenario JSON that produced it.
 from __future__ import annotations
 
 from pathlib import Path
+
 from jinja2 import Environment, FileSystemLoader
 
 from shadow_strike.core.models import AttackScenario
@@ -158,18 +159,18 @@ class ScenarioCompiler:
             "// parsed by shadow_strike.verifier instead; see architecture §2.4.",
         ]
 
-        return dict(
-            scenario_id=scenario.scenario_id,
-            vulnerability_class=scenario.vulnerability_class.value,
-            hypothesis=scenario.hypothesis.replace("\n", " "),
-            fork_url=scenario.initial_state.fork_url,
-            fork_block=scenario.initial_state.fork_block,
-            import_lines=import_lines,
-            contract_decls=contract_decls,
-            setup_lines=setup_lines,
-            before_snapshot_lines=before_snapshot_lines,
-            step_lines=step_lines,
-            after_snapshot_lines=after_snapshot_lines,
-            emit_lines=emit_lines,
-            assertion_lines=assertion_lines,
-        )
+        return {
+            "scenario_id": scenario.scenario_id,
+            "vulnerability_class": scenario.vulnerability_class.value,
+            "hypothesis": scenario.hypothesis.replace("\n", " "),
+            "fork_url": scenario.initial_state.fork_url,
+            "fork_block": scenario.initial_state.fork_block,
+            "import_lines": import_lines,
+            "contract_decls": contract_decls,
+            "setup_lines": setup_lines,
+            "before_snapshot_lines": before_snapshot_lines,
+            "step_lines": step_lines,
+            "after_snapshot_lines": after_snapshot_lines,
+            "emit_lines": emit_lines,
+            "assertion_lines": assertion_lines,
+        }

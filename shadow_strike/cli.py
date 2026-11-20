@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 shadow_strike.cli
 ===================
@@ -20,11 +19,11 @@ from pathlib import Path
 
 from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
 from shadow_strike.attack_library.registry import AttackLibrary
-from shadow_strike.execution.mock_executor import MockExecutor
-from shadow_strike.verifier.verifier import Verifier
-from shadow_strike.storage.db import KnowledgeStore
-from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
 from shadow_strike.core.models import AttackScenario
+from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
+from shadow_strike.execution.mock_executor import MockExecutor
+from shadow_strike.storage.db import KnowledgeStore
+from shadow_strike.verifier.verifier import Verifier
 
 
 def _parse_kv(pairs: list[str]) -> dict[str, str]:
@@ -105,8 +104,8 @@ def cmd_run_scenario(args):
           file=sys.stderr)
 
     if args.engine == "foundry":
-        from shadow_strike.execution.foundry_runner import ForgeRunner
         from shadow_strike.execution.compiler import ScenarioCompiler
+        from shadow_strike.execution.foundry_runner import ForgeRunner
         compiler = ScenarioCompiler()
         test_path = compiler.compile_to_file(scenario, out_dir=Path(args.foundry_root or ".") / "contracts/test/generated")
         print(f"compiled to {test_path}", file=sys.stderr)
@@ -153,7 +152,6 @@ def cmd_save_scenario(args):
     if not rows:
         print(f"no attempts found for scenario_id={args.scenario_id}", file=sys.stderr)
         sys.exit(1)
-    import json as _json
     scenario_row = store.conn.execute(
         "SELECT scenario_json FROM scenarios WHERE id = ?", (args.scenario_id,)
     ).fetchone()
