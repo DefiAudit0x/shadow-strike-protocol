@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
-from shadow_strike.agent.nodes import executor_node
+from shadow_strike.agent.nodes import executor_node, scenario_planner_node
 from shadow_strike.benchmark.runner import run_benchmark
 from shadow_strike.core.models import ExecutionResult
 from shadow_strike.execution.foundry_runner import ForgeRunner
@@ -101,6 +101,26 @@ class TestFoundryProductionPath(unittest.TestCase):
     def test_executor_node_without_scenario_does_not_invoke_forge(self):
         self.assertIsNone(executor_node({"current_scenario": None}, self.executor)["execution_result"])
         self.assertFalse((self.root / "forge-invocations.jsonl").exists())
+
+    def test_executor_node_compiles_and_runs_forge_runner(self):
+        state = scenario_planner_node(
+            {"hypotheses": [{"vulnerability_class": "reentrancy", "hypothesis": SOURCE}]},
+            fork_url="", fork_block=0, target_contracts=TARGETS,
+        )
+        scenario = state["current_scenario"]
+        self.assertIsNotNone(scenario)
+        with patch.object(self.executor, "run", wraps=self.executor.run) as run:
+            result = executor_node(state, self.executor)["execution_result"]
+        run.assert_called_once()
+        executed_scenario, test_file = run.call_args.args
+        self.assertIs(executed_scenario, scenario)
+        self.assertTrue(Path(test_file).is_file())
+        self.assertIsInstance(result, ExecutionResult)
+        self.assertEqual(result.scenario_id, scenario.scenario_id)
+        self.assertEqual(result.engine, "foundry")
+        self.assertFalse(result.reverted)
+        self.assertEqual(result.state_vars["attacker"]["eth_balance_after"], 11)
+        self.assertEqual(len(self.assert_forge_ran()), 1)
 
     def test_benchmark_compiles_and_runs_foundry_scenario(self):
         report = run_benchmark(SOURCE, "Foundry benchmark", TARGETS, {"reentrancy": self.executor})
