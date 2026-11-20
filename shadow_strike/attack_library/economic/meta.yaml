@@ -14,9 +14,7 @@ default_invariants: []
 # alignment, not a structural property of the code — no sane generic
 # default exists.
 
-default_success_conditions:
-  - expression: "attacker.profit_from_rational_actor_exploit > attacker.cost_of_attack"
-    description: "The 'exploit' is simply the most profitable rational action available — the mechanism design itself is the bug"
+default_success_conditions: []
 
 heuristic_source_patterns:
   - pattern: 'governance'

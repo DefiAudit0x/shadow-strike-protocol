@@ -22,6 +22,28 @@ from __future__ import annotations
 import ast
 from typing import Any
 
+# Catalog for auditing library defaults, based on execution/STATE_PROTOCOL.md
+# and the mock and Foundry state emitters. A {target} field is available only
+# when the scenario's target emits it and its builder binds that placeholder.
+EMITTABLE_STATE_NAMES = frozenset({
+    "attacker.eth_balance_before",
+    "attacker.eth_balance_after",
+    "attacker.legitimate_entitlement",
+    "{target}.eth_balance_before",
+    "{target}.eth_balance_after",
+    "{target}.owner",
+    "{target}.last_caller",
+    "{target}.replay_count",
+    "{target}.victim_shares",
+    "{target}.attacker_balance",
+    "{target}.initialized",
+    "{target}.privileged_state",
+    "{target}.unique_signatures_used",
+    "{target}.total_assets",
+    "{target}.total_shares",
+    "{target}.implementation",
+})
+
 _ALLOWED_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow, ast.FloorDiv)
 _ALLOWED_CMPOPS = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 _ALLOWED_BOOLOPS = (ast.And, ast.Or)

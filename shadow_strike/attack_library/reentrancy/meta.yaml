@@ -12,8 +12,7 @@ description: >
 # expose <alias>.eth_balance_before / <alias>.eth_balance_after. An
 # invariant referencing a name neither executor emits is reported as
 # "unevaluable" by the Verifier rather than silently skipped or passed.
-default_invariants:
-  - "vault.eth_balance_after >= 0"
+default_invariants: []
 
 default_success_conditions:
   - expression: "attacker.eth_balance_after - attacker.eth_balance_before > attacker.legitimate_entitlement"

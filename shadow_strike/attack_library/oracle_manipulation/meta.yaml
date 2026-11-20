@@ -7,12 +7,11 @@ description: >
   flash_loan: the attacker typically doesn't have enough capital to move
   the pool on their own, so they borrow it atomically.
 
-default_invariants:
-  - "protocol.collateral_value_after >= protocol.debt_value_after"
+default_invariants: []
 
 default_success_conditions:
   - expression: "attacker.eth_balance_after - attacker.eth_balance_before > 0"
-    description: "Attacker extracted value purely from a manipulated price read"
+    description: "Attacker ended with more ETH than they started with"
 
 heuristic_source_patterns:
   - pattern: 'getReserves()'

@@ -10,12 +10,9 @@ description: >
   totalAssets without minting shares, so the NEXT depositor's shares
   round down to zero.
 
-default_invariants:
-  - "vault.shares_minted_for(deposit_amount) > 0"
+default_invariants: []
 
-default_success_conditions:
-  - expression: "victim.shares_received_after_deposit == 0"
-    description: "A legitimate depositor received zero shares for a nonzero deposit (classic inflation-attack signature)"
+default_success_conditions: []
 
 heuristic_source_patterns:
   - pattern: 'totalAssets()'
