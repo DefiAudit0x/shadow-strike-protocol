@@ -52,7 +52,7 @@ class SandboxedSubprocess:
 
     def run(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
         start = time.monotonic()
-        usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        child_usage = None
         marker = b"\n[output truncated]\n"
         cap = self.limits.max_output_bytes
         if cap < len(marker):
@@ -68,7 +68,14 @@ class SandboxedSubprocess:
                 with selectors.DefaultSelector() as selector:
                     selector.register(child.stdout, selectors.EVENT_READ, "stdout")
                     selector.register(child.stderr, selectors.EVENT_READ, "stderr")
-                    while selector.get_map() or child.poll() is None:
+                    while True:
+                        if not selector.get_map():
+                            pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+                            if pid:
+                                # Record the status before Popen's context manager calls wait().
+                                child.returncode = os.waitstatus_to_exitcode(status)
+                                child_usage = usage
+                                break
                         remaining = self.limits.wall_clock_seconds - (time.monotonic() - start)
                         if remaining <= 0:
                             raise SandboxLimitExceeded(
@@ -85,13 +92,13 @@ class SandboxedSubprocess:
                             buffer.extend(chunk[:available])
                             if len(chunk) > available:
                                 truncated.add(name)
-                    child.wait()
             finally:
                 try:
                     os.killpg(child.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                child.wait()
+                if child.returncode is None:
+                    child.wait()
             outputs = {}
             for name, buffer in buffers.items():
                 decoded = buffer.decode(errors="replace")
@@ -114,11 +121,10 @@ class SandboxedSubprocess:
                 f"CPU limit ({self.limits.cpu_seconds}s) exceeded after {elapsed:.1f}s wall time"
             )
         if proc.returncode == -signal.SIGKILL:
-            usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
-            cpu_used = (usage_after.ru_utime + usage_after.ru_stime
-                        - usage_before.ru_utime - usage_before.ru_stime)
             # Linux kills at the hard CPU limit, allowing for accounting granularity.
-            if cpu_used >= self.limits.cpu_seconds - 0.05:
+            if child_usage is not None and (
+                child_usage.ru_utime + child_usage.ru_stime >= self.limits.cpu_seconds - 0.05
+            ):
                 raise SandboxLimitExceeded(
                     f"CPU limit ({self.limits.cpu_seconds}s) exceeded after {elapsed:.1f}s wall time"
                 )
