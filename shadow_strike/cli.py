@@ -153,15 +153,14 @@ def cmd_run_scenario(args):
 
 def cmd_save_scenario(args):
     """Round-trip a stored scenario back out to an editable YAML file."""
-    store = KnowledgeStore(db_path=args.db)
-    rows = store.attempts_for_scenario(args.scenario_id)
-    if not rows:
-        print(f"no attempts found for scenario_id={args.scenario_id}", file=sys.stderr)
-        sys.exit(1)
-    scenario_row = store.conn.execute(
-        "SELECT scenario_json FROM scenarios WHERE id = ?", (args.scenario_id,)
-    ).fetchone()
-    scenario = AttackScenario.from_json(scenario_row["scenario_json"])
+    with run_store(db_path=args.db) as store:
+        scenario_row = store.conn.execute(
+            "SELECT scenario_json FROM scenarios WHERE id = ?", (args.scenario_id,)
+        ).fetchone()
+        if scenario_row is None:
+            print(f"ERROR: scenario not found: {args.scenario_id}", file=sys.stderr)
+            sys.exit(1)
+        scenario = AttackScenario.from_json(scenario_row["scenario_json"])
     out_path = save_scenario_yaml(scenario, args.out)
     print(f"written: {out_path}")
 
