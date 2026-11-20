@@ -141,10 +141,24 @@ class TestLangGraphFinalization(unittest.TestCase):
         be declared in ShadowStrikeState — in real LangGraph a node writes
         only to declared state channels, so an undeclared
         _critic_adjustment is dropped and the planner never receives the
-        critic's adjustment, silently disabling A08 in this backend."""
-        from shadow_strike.agent.graph_langgraph import ShadowStrikeState
+        critic's adjustment, silently disabling A08 in this backend.
 
-        declared = set(ShadowStrikeState.__annotations__)
+        Fix 8d: the module is loaded through the fake langgraph harness,
+        so this schema-only test also runs where langgraph is not
+        installed — the package is optional and CI does not install it."""
+        module_name = "shadow_strike.agent.graph_langgraph"
+        cached_module = sys.modules.pop(module_name, None)
+        try:
+            with patch.dict(sys.modules, {
+                "langgraph": _FakeLangGraphPackage,
+                "langgraph.graph": _FakeLangGraphModule,
+            }):
+                graph_module = importlib.import_module(module_name)
+                declared = set(graph_module.ShadowStrikeState.__annotations__)
+        finally:
+            sys.modules.pop(module_name, None)
+            if cached_module is not None:
+                sys.modules[module_name] = cached_module
         for key in (
             "_critic_adjustment",
             "_llm_critic_notes",
