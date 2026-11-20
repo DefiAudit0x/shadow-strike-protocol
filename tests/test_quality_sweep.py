@@ -70,6 +70,42 @@ class TestQualitySweep(unittest.TestCase):
         with self.assertRaises(UnsafeExpressionError):
             safe_eval('value()', {'value': lambda: 1})
 
+    def test_safe_eval_rejects_custom_value_type_without_calling_methods(self):
+        calls = []
+
+        class CustomMeta(type):
+            def __eq__(cls, other):
+                calls.append('equality')
+                return True
+
+        class CustomValue(metaclass=CustomMeta):
+            def __bool__(self):
+                calls.append('truthiness')
+                return True
+
+        with self.assertRaises(UnsafeExpressionError):
+            safe_eval('not value', {'value': CustomValue()})
+        self.assertEqual(calls, [])
+
+    def test_safe_eval_rejects_custom_keys_before_lookup(self):
+        calls = []
+
+        class CustomKey(str):
+            __hash__ = str.__hash__
+
+            def __eq__(self, other):
+                calls.append('equality')
+                return True
+
+        for expression, context in (
+            ('value', {CustomKey('value'): 1}),
+            ('outer.value', {'outer': {CustomKey('value'): 1}}),
+        ):
+            with self.subTest(expression=expression):
+                with self.assertRaisesRegex(UnsafeExpressionError, 'dictionary keys must be plain strings'):
+                    safe_eval(expression, context)
+                self.assertEqual(calls, [])
+
     def test_safe_eval_c07_flat_dotted_context(self):
         self.assertEqual(safe_eval('a.b', {'a.b': 1}), 1)
         self.assertEqual(safe_eval('a.b.c', {'a': {'b.c': 2}}), 2)

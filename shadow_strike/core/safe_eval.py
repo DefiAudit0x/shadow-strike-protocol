@@ -59,7 +59,7 @@ _MAX_BITS = 4096
 
 
 def _bounded(value):
-    if type(value) not in (int, float, bool, str, type(None)):
+    if not any(type(value) is allowed for allowed in (int, float, bool, str, type(None))):
         raise UnsafeExpressionError("only primitive context values are allowed")
     if type(value) is str and len(value) > _MAX_STRING:
         raise UnsafeExpressionError("string resource limit exceeded")
@@ -84,6 +84,8 @@ def _resolve_dotted(node: ast.AST, context: dict[str, Any]) -> Any:
     for index, part in enumerate(parts):
         if type(value) is not dict:
             raise UnsafeExpressionError("attribute access requires a plain dictionary")
+        if any(type(key) is not str for key in value):
+            raise UnsafeExpressionError("dictionary keys must be plain strings")
         dotted = ".".join(parts[index:])
         if dotted in value:
             return _bounded(value[dotted])
