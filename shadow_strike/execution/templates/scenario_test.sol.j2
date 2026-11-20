@@ -16,7 +16,9 @@ contract ShadowStrike_{{ scenario_id }} is Test {
 {% endfor %}
 
     function setUp() public {
+{% if fork_url %}
         vm.createSelectFork("{{ fork_url }}", {{ fork_block }});
+{% endif %}
 {% for line in setup_lines %}
         {{ line }}
 {% endfor %}
