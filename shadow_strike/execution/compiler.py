@@ -188,6 +188,17 @@ class ScenarioCompiler:
         # (K02 below), so a balance keyed by one must fund the deployed
         # contract instead of the dead placeholder.
         replaced_placeholders: dict[str, str] = {}
+        # 11c: a value-bearing receiver attack is split into a separate
+        # deposit on the primary target (11b) — a synthesized interface
+        # for that target must declare deposit(), or the generated test
+        # cannot compile (the interface is otherwise built only from
+        # steps that target the alias directly).
+        primary_alias = next(iter(scenario.initial_state.target_contracts), None)
+        value_attack = any(
+            step.target == "attacker" and _abi_types(step.function)[0] == "attack"
+            and step.caller == "attacker" and step.value_eth
+            for step in all_steps
+        )
         for alias, address in scenario.initial_state.target_contracts.items():
             _identifier(alias)
             _address(address)
@@ -204,6 +215,8 @@ class ScenarioCompiler:
                         params = ", ".join(t + (" calldata" if t in ("string", "bytes") else "")
                                            for t in types)
                         methods.add(f"function {name}({params}) external payable;")
+                if alias == primary_alias and value_attack:
+                    methods.add("function deposit() external payable;")
                 interfaces.append(f"interface {sol_type} {{ " + " ".join(sorted(methods)) + " }")
             contract_decls.append(f"{sol_type} {alias};")
             if address.lower() == "0x" + "1" * 40 and sol_type == "IVault":
@@ -299,18 +312,29 @@ class ScenarioCompiler:
                 in ("MaliciousReceiver_demo", "ShadowStrikeBoundedReceiver")
             )
             if receiver_attack and step.value_eth:
-                # 11b: the stake must come from the receiver's own
-                # balance, not the test contract's — split it into a
-                # separate deposit from the receiver, then call
-                # attack() with no value (mirrors the reference test's
-                # K04 fix; otherwise the test contract funds the attack
-                # and the measured gain includes test money, or the call
-                # fails outright when the test contract holds no ETH).
-                primary = next(iter(scenario.initial_state.target_contracts), None)
-                if primary is not None:
-                    lines.append("vm.prank(address(attacker));")
-                    lines.append(f"{primary}.deposit{{value: {step.value_eth} ether}}();")
-                    value_clause = ""
+                if step.expected_revert:
+                    # 11c: the stake must be part of the reverted call,
+                    # or the deposit would be committed even when
+                    # attack() reverts (and could fail outside the
+                    # expected-revert scope). Keep the value on the
+                    # single atomic attack() call and fund the test
+                    # contract with exactly the stake — it rolls back
+                    # with the revert, and no gain is measured for a
+                    # reverted step, so no subsidy is realized.
+                    lines.append(f"vm.deal(address(this), {step.value_eth} ether);")
+                else:
+                    # 11b: the stake must come from the receiver's own
+                    # balance, not the test contract's — split it into a
+                    # separate deposit from the receiver, then call
+                    # attack() with no value (mirrors the reference test's
+                    # K04 fix; otherwise the test contract funds the attack
+                    # and the measured gain includes test money, or the call
+                    # fails outright when the test contract holds no ETH).
+                    primary = next(iter(scenario.initial_state.target_contracts), None)
+                    if primary is not None:
+                        lines.append("vm.prank(address(attacker));")
+                        lines.append(f"{primary}.deposit{{value: {step.value_eth} ether}}();")
+                        value_clause = ""
             if step.expected_revert:
                 lines.append("vm.expectRevert();")
             if not receiver_attack:
