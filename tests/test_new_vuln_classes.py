@@ -291,6 +291,45 @@ class TestFloatRoundTripIsNotTheft(unittest.TestCase):
         self.assertTrue(verdict.verified)
         self.assertEqual(verdict.verdict, "verified")
 
+    def test_tiny_real_gain_below_12_decimals_verifies(self):
+        """CodeRabbit follow-up on PR #29 (Fix 7d): rounding to 12 decimal
+        places would erase a real sub-1e-12 gain — funding and deposit of
+        1e-13 ETH, three reentries, ending near 4e-13 ETH must still verify.
+        The rounding must kill float residue (relative error) without
+        destroying significant digits."""
+        scenario = AttackScenario(
+            vulnerability_class="reentrancy",
+            target_protocol="TestVault",
+            hypothesis="withdraw reenters",
+            attacker=AttackerModel(initial_eth=1e-13),
+            initial_state=InitialState(
+                fork_url="https://example/rpc", fork_block=1,
+                target_contracts={"vault": "0xabc"},
+                balances={"vault": 9.0},
+            ),
+            steps=[
+                TransactionStep(step_id=1, caller="attacker", target="vault",
+                                function="deposit()", value_eth=1e-13),
+                TransactionStep(step_id=2, caller="attacker", target="attacker",
+                                function="attack()"),
+            ],
+            success_conditions=[
+                SuccessCondition(
+                    expression="attacker.eth_balance_after > attacker.legitimate_entitlement",
+                    description="attacker ended with more ETH than their starting entitlement",
+                ),
+            ],
+        )
+        result = MockExecutor(
+            contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"},
+        ).execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertGreater(result.state_vars["attacker"]["eth_balance_after"],
+                           result.state_vars["attacker"]["legitimate_entitlement"])
+        verdict = Verifier().verify(scenario, result)
+        self.assertTrue(verdict.verified)
+        self.assertEqual(verdict.verdict, "verified")
+
 
 class TestOracleManipulationLive(unittest.TestCase):
     def test_price_manipulation_enables_overborrow(self):
