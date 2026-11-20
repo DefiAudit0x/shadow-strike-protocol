@@ -47,6 +47,7 @@ class SimpleShadowStrikeGraph:
             "target_contract_source": target_contract_source,
             "target_protocol_name": target_protocol_name,
             "attempt_count": 0,
+            "_counts_executed_attempts": True,
             "history": [],
         }
 
@@ -80,6 +81,7 @@ class SimpleShadowStrikeGraph:
                 return state
 
             state = executor_node(state, self.executor)
+            state["attempt_count"] += 1
             emit("executor")
 
             state = verifier_node(state, self.verifier)
@@ -94,7 +96,7 @@ class SimpleShadowStrikeGraph:
             # Part 9: the bound is the tighter of the graph's cap and the
             # scenario's own max_retries.
             bound = _effective_max_retries(state, self.max_retries)
-            if state["attempt_count"] >= bound:
+            if state["attempt_count"] > bound:
                 state["final_proof"] = None
                 state["stopped_reason"] = f"max_retries ({bound}) exhausted without verification"
                 return state

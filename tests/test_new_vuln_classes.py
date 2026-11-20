@@ -127,9 +127,8 @@ class TestPlannerHypothesisOrder(unittest.TestCase):
     def test_unsupported_first_hypothesis_does_not_mask_later_supported_class(self):
         source = '''
         contract Vault {
-            // unchecked {
             function withdraw() external {
-                msg.sender.call{value: 1}("");
+                unchecked { msg.sender.call{value: 1}(""); }
             }
         }
         '''

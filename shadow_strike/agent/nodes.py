@@ -35,11 +35,20 @@ from shadow_strike.verifier.verifier import Verifier
 LLMFn = Callable[[str], str]   # prompt -> completion; plug in a real model client here
 
 
+def _executable_source(source: str) -> str:
+    """Mask comments and quoted literals while preserving token spacing and line numbers."""
+    return re.sub(
+        r'//[^\r\n]*|/\*[\s\S]*?(?:\*/|$)|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\'',
+        lambda match: re.sub(r"[^\r\n]", " ", match.group()),
+        source,
+    )
+
+
 # ---------------------------------------------------------------------
 # 1. recon
 # ---------------------------------------------------------------------
 def recon_node(state: dict) -> dict:
-    source = state["target_contract_source"]
+    source = _executable_source(state["target_contract_source"])
     functions = re.findall(r"function\s+(\w+)\s*\(([^)]*)\)", source)
     sensitive_calls = []
     for lineno, line in enumerate(source.splitlines(), 1):
@@ -63,26 +72,23 @@ def _parse_llm_hypothesis_line(line: str, library: AttackLibrary) -> dict | None
     hypothesis dict (Part 10). The class must be one the attack library
     knows, and the text must be non-empty; anything else returns None so
     free-form LLM prose never becomes a hypothesis the planner must act on."""
-    text = line.strip()
-    if not text:
+    # Only a class field at the start (optionally a list item) is a suggestion.
+    match = re.fullmatch(r"\s*(?:(?:[-*]|\d+[.)])\s+)?(\w+)\s*:\s*(.+)", line)
+    if match is None:
         return None
-    for vc in library.available_classes():
-        marker = f"{vc}:"
-        idx = text.find(marker)
-        if idx != -1:
-            hypothesis = text[idx + len(marker):].strip()
-            if hypothesis:
-                return {
-                    "vulnerability_class": vc,
-                    "hypothesis": hypothesis,
-                    "confidence_note": "LLM-proposed — NOT a verdict, see architecture §0 principle #2",
-                }
+    vc, hypothesis = match.group(1), match.group(2).strip()
+    if vc in library.available_classes() and hypothesis:
+        return {
+            "vulnerability_class": vc,
+            "hypothesis": hypothesis,
+            "confidence_note": "LLM-proposed — NOT a verdict, see architecture §0 principle #2",
+        }
     return None
 
 
 def hypothesis_node(state: dict, llm_fn: LLMFn | None = None, library: AttackLibrary | None = None) -> dict:
     library = library or AttackLibrary()
-    source = state["target_contract_source"]
+    source = _executable_source(state["target_contract_source"])
     hypotheses = []
 
     for vuln_class in library.available_classes():
@@ -107,7 +113,7 @@ def hypothesis_node(state: dict, llm_fn: LLMFn | None = None, library: AttackLib
                 f"Given this recon summary: {state['recon_notes']}\n"
                 "Suggest additional vulnerability hypotheses, one per line, each as "
                 "'<vulnerability_class>: <one-sentence hypothesis>'. "
-                "Example: reentrancy: withdraw() sends ETH before updating the balance."
+                "For example:\nreentrancy: withdraw() sends ETH before updating the balance."
             )
         except Exception:  # noqa: BLE001 — any provider failure degrades to heuristics, not a crash
             # A provider that fails mid-run degrades to heuristics instead
@@ -142,7 +148,7 @@ def hypothesis_node(state: dict, llm_fn: LLMFn | None = None, library: AttackLib
 def _build_reentrancy_scenario(chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
                                 library, protocol_name, state) -> AttackScenario:
     primary_alias = next(iter(target_contracts))
-    deposit_amount = max(attacker_initial_eth - 0.1, 0.1)
+    deposit_amount = min(attacker_initial_eth, max(attacker_initial_eth - 0.1, 0.1))
     default_sc = library.default_success_conditions("reentrancy")
     default_inv = library.default_invariants("reentrancy")
 
@@ -241,7 +247,7 @@ def _build_oracle_manipulation_scenario(chosen, target_contracts, attacker_initi
                          list(target_contracts)[-1])
     default_sc = library.default_success_conditions("oracle_manipulation")
     default_inv = library.default_invariants("oracle_manipulation")
-    swap_amount = max(attacker_initial_eth * 0.9, 0.1)
+    swap_amount = min(attacker_initial_eth, max(attacker_initial_eth * 0.9, 0.1))
 
     return AttackScenario(
         vulnerability_class="oracle_manipulation",
@@ -290,7 +296,8 @@ def _build_signature_replay_scenario(chosen, target_contracts, attacker_initial_
 def _build_price_manipulation_scenario(chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
                                         library, protocol_name, state) -> AttackScenario:
     primary_alias = next(iter(target_contracts))
-    donation = max(attacker_initial_eth - 0.01, 0.01)
+    # The attacker also pays the 1e-9 ETH seed deposit inside attack().
+    donation = min(max(attacker_initial_eth - 1e-9, 0.0), max(attacker_initial_eth - 0.01, 0.01))
     return AttackScenario(
         vulnerability_class="price_manipulation",
         target_protocol=protocol_name,
@@ -359,22 +366,24 @@ def scenario_planner_node(
         state["stopped_reason"] = "unsupported_class"
         return state
 
+    # Refine the last attempt, preserving earlier capital/depth improvements.
+    previous = state.get("current_scenario")
+    depth = None
+    if previous is not None:
+        attacker_initial_eth = previous.attacker.initial_eth
+        depth = previous.attacker_max_reentries
+    adjustment = state.pop("_critic_adjustment", None)
+    if adjustment == "increase_attacker_eth":
+        attacker_initial_eth *= 2
+
     scenario = builder(
         chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
         library, state.get("target_protocol_name", "unknown_target"), state,
     )
 
-    # if a critic suggestion exists from a prior failed attempt, apply it
-    adjustment = state.get("_critic_adjustment")
-    if adjustment == "increase_attacker_eth":
-        scenario.attacker.initial_eth *= 2
-        if scenario.steps and scenario.steps[0].function.startswith(("deposit", "attack")):
-            scenario.steps[0].value_eth = max(scenario.attacker.initial_eth - 0.1, 0.1)
-    elif adjustment == "increase_max_reentries":
-        # The override used to be written to state["_max_reentries_override"],
-        # which nothing ever read. The adjustment now lives on the scenario
-        # itself, and the mock executor reads it when constructing the
-        # attacker (Part 9).
+    if depth is not None:
+        scenario.attacker_max_reentries = depth
+    if adjustment == "increase_max_reentries":
         scenario.attacker_max_reentries += 2
 
     state["current_scenario"] = scenario
@@ -433,7 +442,10 @@ def _effective_max_retries(state: dict, default: int) -> int:
 def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     verdict = state.get("verifier_verdict")
     execution_result = state.get("execution_result")
-    state["attempt_count"] = state.get("attempt_count", 0) + 1
+    # SimpleShadowStrikeGraph counts executions itself. Keep the legacy
+    # retry counter for orchestrators that still delegate counting here.
+    if not state.get("_counts_executed_attempts"):
+        state["attempt_count"] = state.get("attempt_count", 0) + 1
 
     reason = "unknown"
     adjustment = None
@@ -444,6 +456,20 @@ def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     elif verdict and not verdict.verified:
         reason = "success_conditions not met"
         adjustment = "increase_max_reentries"
+
+    if llm_fn is not None:
+        try:
+            notes = llm_fn(
+                f"Attempt {state['attempt_count']} failed: {reason}. "
+                f"Trace: {execution_result.call_trace if execution_result else 'n/a'}. "
+                "Suggest one concrete scenario adjustment. Reply with exactly one of: "
+                "increase_attacker_eth, increase_max_reentries."
+            )
+            state["_llm_critic_notes"] = notes
+            if notes.strip() in {"increase_attacker_eth", "increase_max_reentries"}:
+                adjustment = notes.strip()
+        except Exception:  # noqa: BLE001 — provider failure keeps the rule-based adjustment
+            state["_llm_critic_notes"] = "LLM unavailable; degraded to the rule-based adjustment."
 
     # Do not repeat a failed adjustment: if an earlier attempt already
     # tried this adjustment and still failed, there is nothing new to try
@@ -461,15 +487,4 @@ def critic_node(state: dict, llm_fn: LLMFn | None = None) -> dict:
     }]
     state["_critic_adjustment"] = adjustment
 
-    if llm_fn is not None:
-        try:
-            state["_llm_critic_notes"] = llm_fn(
-                f"Attempt {state['attempt_count']} failed: {reason}. "
-                f"Trace: {execution_result.call_trace if execution_result else 'n/a'}. "
-                f"Suggest one concrete scenario adjustment."
-            )
-        except Exception:  # noqa: BLE001 — any provider failure degrades, not a crash
-            # A provider that fails mid-run degrades instead of crashing
-            # the run (Part 10); the rule-based adjustment above stands.
-            state["_llm_critic_notes"] = "LLM unavailable; degraded to the rule-based adjustment."
     return state
