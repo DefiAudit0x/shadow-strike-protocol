@@ -11,9 +11,12 @@ from shadow_strike.core.models import (
 from shadow_strike.execution.mock_executor import (
     Ledger,
     MockExecutor,
+    MockRevert,
     MockWorld,
+    OracleFedLendingMarket,
     ReentrantAttacker,
     SafeVault,
+    SelfLiquidationMarket,
     SimplePool,
     VulnerableVault,
 )
@@ -133,7 +136,7 @@ class TestMockExecutor(unittest.TestCase):
         self.assertFalse(result.reverted)
         self.assertEqual(result.state_diff["after"], {"attacker": 5, "vault": 5})
         self.assertEqual(result.state_vars["vault"]["total_assets"], 5)
-        self.assertEqual(result.state_vars["vault"]["total_shares"], 2)
+        self.assertEqual(result.state_vars["vault"]["total_shares"], 2_000_000_000)
 
     def test_swap_settles_both_assets(self):
         pool = SimplePool("pool", reserve_a=10, reserve_b=20)
@@ -143,6 +146,29 @@ class TestMockExecutor(unittest.TestCase):
         self.assertEqual(world.ledger.balances, {"pool": 20, "trader": 2})
         self.assertEqual(world.token_b_ledger.balances, {"pool": 10, "trader": 10})
         self.assertEqual((pool.reserve_a, pool.reserve_b), (20, 10))
+
+    def test_oracle_market_conserves_eth_and_accounts_for_debt(self):
+        pool = SimplePool("pool", reserve_a=10, reserve_b=10)
+        market = OracleFedLendingMarket("market", pool, reserve_eth=50)
+        world = MockWorld(Ledger({"market": 50, "borrower": 1}))
+
+        market.depositCollateral("borrower", world, msg_value=1)
+        self.assertEqual(world.ledger.balances, {"market": 51, "borrower": 0})
+        market.borrowAgainstCollateral("borrower", world)
+        self.assertEqual(world.ledger.balances, {"market": 50, "borrower": 1})
+        self.assertEqual(market.debt["borrower"], 1)
+        with self.assertRaisesRegex(MockRevert, "nothing borrowable"):
+            market.borrowAgainstCollateral("borrower", world)
+        self.assertEqual(world.ledger.balances, {"market": 50, "borrower": 1})
+        self.assertEqual(market.debt["borrower"], 1)
+
+    def test_second_position_adds_to_existing_collateral_and_debt(self):
+        market = SelfLiquidationMarket("market")
+        world = MockWorld(Ledger({"market": 10, "borrower": 10}))
+        market.openPosition("borrower", world, collateral_amt=6, debt_amt=4)
+        market.openPosition("borrower", world, collateral_amt=3, debt_amt=2)
+        self.assertEqual((market.collateral["borrower"], market.debt["borrower"]), (9, 6))
+        self.assertEqual(world.ledger.balances, {"market": 13, "borrower": 7})
 
     def test_open_position_pays_debt_from_market(self):
         executor = MockExecutor({"market": "SelfLiquidationMarket"})
