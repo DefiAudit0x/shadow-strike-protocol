@@ -812,6 +812,12 @@ class MockExecutor:
         for alias, bal in scenario.initial_state.balances.items():
             ledger.balances[alias] = bal
 
+        # Effective starting funding: initial_state.balances overrides replace
+        # initial_eth (see the seeding loop above), so the entitlement baseline
+        # must follow the override — otherwise a no-theft scenario funded above
+        # initial_eth reads verified.
+        effective_attacker_funding = ledger.balances.get("attacker", scenario.attacker.initial_eth)
+
         for alias, contract in world.contracts.items():
             if isinstance(contract, SimplePool):
                 ledger.balances.setdefault(alias, contract.reserve_a)
@@ -865,9 +871,10 @@ class MockExecutor:
             }
         # Starting-capital baseline used by the reentrancy condition, which
         # compares gross ending balance against entitlement (not net gain
-        # against the same starting balance).
+        # against the same starting balance). The baseline is the effective
+        # starting funding captured after the balances overrides above.
         if "attacker" in state_vars:
-            state_vars["attacker"]["legitimate_entitlement"] = scenario.attacker.initial_eth
+            state_vars["attacker"]["legitimate_entitlement"] = effective_attacker_funding
 
         # generic extension point: any mock contract exposing state_vars()
         # gets those merged in under its own alias, so success_conditions
