@@ -141,6 +141,10 @@ class KnowledgeStore:
         self.conn.commit()
         return proof_id
 
+    def list_proofs(self) -> list[sqlite3.Row]:
+        """Return stored proof rows, newest first."""
+        return self.conn.execute("SELECT * FROM proofs ORDER BY created_at DESC").fetchall()
+
     # ---- attack library (generalized, reusable templates) -------------
     def add_library_entry(self, vulnerability_class: str, scenario_template: dict, tags: list[str] | None = None) -> str:
         entry_id = f"lib_{uuid.uuid4().hex[:10]}"

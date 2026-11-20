@@ -26,6 +26,7 @@ from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import AttackScenario
 from shadow_strike.execution.foundry_runner import execute_scenario
+from shadow_strike.storage.persistence import run_store, save_run
 from shadow_strike.verifier.verifier import Verifier
 
 
@@ -73,6 +74,8 @@ def run_benchmark(
     fork_block: int = 0,
     attacker_initial_eth: float = 1.0,
     library: AttackLibrary | None = None,
+    store=None,
+    db_path: str = "shadow_strike_knowledge.sqlite3",
 ) -> BenchmarkReport:
     library = library or AttackLibrary()
     verifier = Verifier()
@@ -84,38 +87,41 @@ def run_benchmark(
     flagged_classes = sorted({h["vulnerability_class"] for h in state["hypotheses"]})
     report = BenchmarkReport(target_protocol=target_protocol_name, hypotheses_flagged=flagged_classes)
 
-    for vuln_class in flagged_classes:
-        chosen = next(h for h in state["hypotheses"] if h["vulnerability_class"] == vuln_class)
-        builder = SCENARIO_BUILDERS.get(vuln_class)
+    with run_store(store, db_path) as active_store:
+        for vuln_class in flagged_classes:
+            chosen = next(h for h in state["hypotheses"] if h["vulnerability_class"] == vuln_class)
+            builder = SCENARIO_BUILDERS.get(vuln_class)
 
-        if builder is None:
-            report.results.append(ClassResult(vuln_class, "no_builder",
-                                                detail="see attack_library meta.yaml for why"))
-            continue
+            if builder is None:
+                report.results.append(ClassResult(vuln_class, "no_builder",
+                                                    detail="see attack_library meta.yaml for why"))
+                continue
 
-        try:
-            scenario: AttackScenario = builder(
-                chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
-                library, target_protocol_name, state,
-            )
-        except Exception as e:  # noqa: BLE001 — surfaced as a scorecard row, not a crash
-            report.results.append(ClassResult(vuln_class, "build_error", detail=str(e)))
-            continue
+            try:
+                scenario: AttackScenario = builder(
+                    chosen, target_contracts, attacker_initial_eth, fork_url, fork_block,
+                    library, target_protocol_name, state,
+                )
+            except Exception as e:  # noqa: BLE001 — surfaced as a scorecard row, not a crash
+                report.results.append(ClassResult(vuln_class, "build_error", detail=str(e)))
+                continue
 
-        executor = executors.get(vuln_class)
-        if executor is None:
-            report.results.append(ClassResult(vuln_class, "no_executor", scenario_id=scenario.scenario_id))
-            continue
+            executor = executors.get(vuln_class)
+            if executor is None:
+                report.results.append(ClassResult(vuln_class, "no_executor", scenario_id=scenario.scenario_id))
+                continue
 
-        result = execute_scenario(executor, scenario)
-        verdict = verifier.verify(scenario, result)
+            result = execute_scenario(executor, scenario)
+            verdict = verifier.verify(scenario, result)
+            save_run(active_store, scenario, result, verdict,
+                     failure_reason=result.revert_reason or "success conditions not met")
 
-        report.results.append(ClassResult(
-            vulnerability_class=vuln_class,
-            status="exploitable" if verdict.verified else "resisted",
-            scenario_id=scenario.scenario_id,
-            proof_artifact=verdict.proof_artifact if verdict.verified else None,
-            detail=None if verdict.verified else (result.revert_reason or "success conditions not met"),
-        ))
+            report.results.append(ClassResult(
+                vulnerability_class=vuln_class,
+                status="exploitable" if verdict.verified else "resisted",
+                scenario_id=scenario.scenario_id,
+                proof_artifact=verdict.proof_artifact if verdict.verified else None,
+                detail=None if verdict.verified else (result.revert_reason or "success conditions not met"),
+            ))
 
     return report

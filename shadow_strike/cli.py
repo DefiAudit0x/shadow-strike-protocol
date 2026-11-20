@@ -24,6 +24,7 @@ from shadow_strike.core.models import AttackScenario
 from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.storage.db import KnowledgeStore
+from shadow_strike.storage.persistence import run_store, save_run
 from shadow_strike.verifier.verifier import Verifier
 
 
@@ -51,7 +52,6 @@ def cmd_run(args):
         }
         executor = MockExecutor(contract_kinds=kinds)
 
-    store = KnowledgeStore(db_path=args.db)
     try:
         llm_fn = build_llm_fn(
             getattr(args, "llm_provider", None), getattr(args, "llm_api_key", None),
@@ -79,15 +79,11 @@ def cmd_run(args):
 
     scenario = result.get("current_scenario")
     if scenario is not None:
-        store.save_scenario(scenario)
-        store.save_attempt(
-            scenario_id=scenario.scenario_id,
-            attempt_number=result["attempt_count"],
-            status="success" if result["final_proof"] else "failure",
-            failure_reason=None if result["final_proof"] else result["stopped_reason"],
-            execution_result=result["execution_result"].to_dict() if result.get("execution_result") else None,
-            verifier_result=result["verifier_verdict"].to_dict() if result.get("verifier_verdict") else None,
-        )
+        with run_store(db_path=args.db) as store:
+            save_run(
+                store, scenario, result.get("execution_result"), result.get("verifier_verdict"),
+                attempt_number=result["attempt_count"], failure_reason=result["stopped_reason"],
+            )
 
     if result["final_proof"]:
         print("ATTACK VERIFIED")
@@ -148,14 +144,8 @@ def cmd_run_scenario(args):
     result = executor.execute(scenario) if hasattr(executor, "execute") else executor.run(scenario, test_path)
     verdict = Verifier().verify(scenario, result)
 
-    store = KnowledgeStore(db_path=args.db)
-    store.save_scenario(scenario)
-    store.save_attempt(
-        scenario_id=scenario.scenario_id, attempt_number=1,
-        status="success" if verdict.verified else "failure",
-        failure_reason=None if verdict.verified else "success_conditions not met",
-        execution_result=result.to_dict(), verifier_result=verdict.to_dict(),
-    )
+    with run_store(db_path=args.db) as store:
+        save_run(store, scenario, result, verdict, failure_reason="success_conditions not met")
 
     print(json.dumps(verdict.proof_artifact, indent=2, default=str))
     sys.exit(0 if verdict.verified else 1)

@@ -32,6 +32,7 @@ from shadow_strike.benchmark.runner import run_benchmark
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.integrations.axiom_adapter import SentinelHypothesisRequest, handle_sentinel_request
 from shadow_strike.storage.db import KnowledgeStore
+from shadow_strike.storage.persistence import save_run
 from shadow_strike.verifier.verifier import Verifier
 
 app = FastAPI(title="Shadow Strike Protocol API")
@@ -93,7 +94,10 @@ def create_run(req: RunRequest):
         # connection belongs to the importing thread, so use a local one.
         run_store = KnowledgeStore(db_path=store.db_path)
         try:
-            run_store.save_scenario(scenario)
+            save_run(
+                run_store, scenario, result.get("execution_result"), result.get("verifier_verdict"),
+                attempt_number=result["attempt_count"], failure_reason=result["stopped_reason"],
+            )
         finally:
             run_store.close()
 
@@ -148,7 +152,7 @@ def create_benchmark(req: BenchmarkRequest):
         target_contracts=req.target_contracts,
         executors=executors,
         fork_url=req.fork_url, fork_block=req.fork_block,
-        attacker_initial_eth=req.attacker_initial_eth, library=library,
+        attacker_initial_eth=req.attacker_initial_eth, library=library, db_path=store.db_path,
     )
     return {
         "target_protocol": report.target_protocol,
@@ -188,7 +192,7 @@ def sentinel_hypothesis(req: SentinelRequest):
         target_contracts=req.target_contracts, suspected_vulnerability_class=req.suspected_vulnerability_class,
         attacker_initial_eth=req.attacker_initial_eth, fork_url=req.fork_url, fork_block=req.fork_block,
     )
-    resp = handle_sentinel_request(sentinel_req, executors, library)
+    resp = handle_sentinel_request(sentinel_req, executors, library, db_path=store.db_path)
     return {
         "request_id": resp.request_id, "verified": resp.verified, "severity": resp.severity,
         "scenario_id": resp.scenario_id, "tested_classes": resp.tested_classes,

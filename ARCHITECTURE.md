@@ -490,3 +490,21 @@ GET    /attack-library/{class}     → سيناريوهات معمَّمة جا�
 ---
 
 هذا الأرشيتكتشر يغطي الطبقات الكاملة من الاستلام (recon) إلى الإثبات (proof)، مع فصل واضح بين الـ reasoning والـ execution والـ verification كما حددتم في المبدأ التصميمي الأساسي. يمكن البدء مباشرة بـ Phase 0 لإثبات الفكرة قبل إضافة تعقيد الـ Agent layer.
+
+### Verified-run persistence and template promotion
+
+The CLI (`run` and `run-scenario`), API, benchmark runner, and Axiom adapter
+persist executed scenarios and attempts; a verified verdict also saves its
+proof artifact in `proofs`, linked to that attempt. Benchmark and adapter callers
+may supply `store=` (caller retains ownership) or `db_path=`; the default is
+`shadow_strike_knowledge.sqlite3`. API entry points use the API's configured
+store path. The shared implementation is `storage.persistence.save_run`.
+
+Generalized template promotion is **intentionally manual** at this verified
+path. The pipeline does not yet generalize target-specific addresses, fork
+settings, or assumptions. After reviewing and generalizing a verified scenario,
+a researcher explicitly calls
+`store.add_library_entry(vulnerability_class, scenario_template, tags=...)`.
+A raw verified scenario is evidence for that deployment, not automatically a
+reusable template; automatic promotion would mislabel it. The curated YAML
+Attack Library and stored `attack_library_entries` remain separate resources.

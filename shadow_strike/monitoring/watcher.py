@@ -79,24 +79,10 @@ class ContinuousMonitor:
             target_contracts={"vault": event.address},
             executors=self.executors,
             attacker_initial_eth=self.attacker_initial_eth,
-            library=self.library,
+            library=self.library, store=self.store,
         )
 
         regressions = self._detect_regressions(event.address, report)
-
-        if self.store is not None:
-            for r in report.results:
-                if r.scenario_id:
-                    # the builder already constructed+validated the scenario
-                    # inside run_benchmark; re-deriving it here just to save
-                    # would duplicate work, so we save what we have: the
-                    # attempt record, keyed by the scenario_id already minted
-                    self.store.save_attempt(
-                        scenario_id=r.scenario_id, attempt_number=1,
-                        status="success" if r.status == "exploitable" else "failure",
-                        failure_reason=None if r.status == "exploitable" else r.detail,
-                        execution_result=None, verifier_result=None,
-                    )
 
         exploitable = [r for r in report.results if r.status == "exploitable"]
         if (exploitable or regressions) and self.alert_fn is not None:
