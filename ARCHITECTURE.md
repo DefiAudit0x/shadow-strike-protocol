@@ -417,27 +417,33 @@ CREATE TABLE attack_library_entries (
 
 ---
 
-## 4. Attack Library كـ Plugin System
+## 4. Attack Library metadata and scenario builders
 
-كل `VulnerabilityClass` له:
-- **Hypothesis template** (prompt مخصص للـ LLM عند توليد فرضيات من هذا النوع)
-- **Attacker contract template** (Solidity template، مثل `MaliciousReceiver` لـ reentrancy، أو `FlashLoanAttacker` لـ flash loans)
-- **Default invariants** (قائمة invariants شائعة لهذا النوع من الثغرات، تُقترح تلقائياً)
-- **Success condition patterns** (تعبيرات جاهزة قابلة للتخصيص)
+The library loads one `meta.yaml` per vulnerability class. Each entry
+provides a display name, description, heuristic source patterns, default
+invariants, and default success conditions. Heuristics propose hypotheses;
+they do not establish a vulnerability.
 
-هذا يجعل إضافة نوع ثغرة جديد = إضافة plugin جديد، دون لمس core الـ engine.
+Adding metadata makes a class discoverable, but does not implement an
+automated scenario. Automated support also needs a builder registered in
+`agent/nodes.py` (`SCENARIO_BUILDERS`), appropriate executor support, and
+regression tests. Classes without a builder require hand-authored scenarios.
+
+The library does not generate attacker contracts. Foundry scenarios that
+need one use a concrete, separately authored Solidity contract supplied to
+`ScenarioCompiler` through `attacker_contract_name` and
+`attacker_import_path`. The compiler renders the scenario test harness and
+imports that contract. The demo uses
+`contracts/src/attackers/MaliciousReceiver_demo.sol`. Use `forge build` to
+check compilation without executing a generated contract.
 
 ```
 attack_library/
+├── registry.py
 ├── reentrancy/
-│   ├── hypothesis_prompt.txt
-│   ├── attacker_template.sol.j2
-│   ├── invariants.yaml
-│   └── success_conditions.yaml
+│   └── meta.yaml
 ├── oracle_manipulation/
-│   └── ...
-├── flash_loan/
-│   └── ...
+│   └── meta.yaml
 └── ...
 ```
 
