@@ -20,6 +20,7 @@ checks this field before treating a proof as real).
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from shadow_strike.core.models import AttackScenario, ExecutionResult
@@ -33,19 +34,24 @@ class MockRevert(Exception):
 
 @dataclass
 class Ledger:
-    """ETH balances for every alias in the simulated world, in ether units."""
+    """Balances for one asset in the simulated world."""
     balances: dict[str, float] = field(default_factory=dict)
 
     def get(self, alias: str) -> float:
         return self.balances.get(alias, 0.0)
 
-    def transfer(self, frm: str, to: str, amount: float, world: MockWorld) -> None:
+    def move(self, frm: str, to: str, amount: float) -> None:
         if amount <= 0:
             return
         if self.balances.get(frm, 0.0) < amount:
             raise MockRevert(f"insufficient balance: {frm} has {self.balances.get(frm, 0.0)}, needs {amount}")
         self.balances[frm] = self.balances.get(frm, 0.0) - amount
         self.balances[to] = self.balances.get(to, 0.0) + amount
+
+    def transfer(self, frm: str, to: str, amount: float, world: MockWorld) -> None:
+        if amount <= 0:
+            return
+        self.move(frm, to, amount)
         # Simulate the EVM calling the recipient's fallback/receive
         # mid-call — this is precisely the hook reentrancy exploits ride on.
         callee = world.contracts.get(to)
@@ -58,6 +64,7 @@ class MockWorld:
     ledger: Ledger
     contracts: dict[str, object] = field(default_factory=dict)
     call_trace: list[dict] = field(default_factory=list)
+    token_b_ledger: Ledger = field(default_factory=Ledger)
 
     def log(self, **kw):
         self.call_trace.append(kw)
@@ -127,7 +134,7 @@ class ReentrantAttacker:
         vault = world.contracts[self.target_alias]
         if (
             self.reentry_count < self.max_reentries
-            and vault.deposits.get(self.target_alias, 0) >= 0
+            and vault.deposits.get(self.alias, 0) > 0
             and world.ledger.get(self.target_alias) >= amount
         ):
             # mirrors the Solidity receive() guard: only reenter while the
@@ -285,7 +292,8 @@ class SimplePool:
         new_reserve_b = k / new_reserve_a
         amount_b_out = self.reserve_b - new_reserve_b
         self.reserve_a, self.reserve_b = new_reserve_a, new_reserve_b
-        world.ledger.balances[self.alias] = world.ledger.balances.get(self.alias, 0.0)
+        world.ledger.move(caller, self.alias, amount_a)
+        world.token_b_ledger.move(self.alias, caller, amount_b_out)
         world.log(contract=self.alias, fn="swapAForB", caller=caller, amount_a=amount_a, amount_b_out=amount_b_out)
         return amount_b_out
 
@@ -335,7 +343,6 @@ class OracleManipulationAttacker:
         pool = world.contracts[self.pool_alias]
         market = world.contracts[self.market_alias]
         swap_amount = swap_amount if swap_amount is not None else msg_value
-        world.ledger.transfer(self.alias, self.pool_alias, swap_amount, world)
         tokens_received = pool.swapAForB(self.alias, world, amount_a=swap_amount)
         # the manipulation: deposit the tokens JUST bought as collateral,
         # then immediately borrow against them while the pool still shows
@@ -343,6 +350,7 @@ class OracleManipulationAttacker:
         # window for the price to correct. This is the actual exploit
         # shape (buy -> deposit -> borrow -> profit), not a disconnected
         # fixed collateral amount.
+        world.token_b_ledger.move(self.alias, self.market_alias, tokens_received)
         market.collateral[self.alias] = market.collateral.get(self.alias, 0.0) + tokens_received
         market.borrowAgainstCollateral(self.alias, world)
         world.log(contract=self.alias, fn="attack", caller=caller, tokens_received=tokens_received)
@@ -407,6 +415,7 @@ class ERC4626LikeVault:
 
     def deposit(self, caller: str, world: MockWorld, msg_value: float = 0.0):
         shares = self._convert_to_shares(msg_value)
+        world.ledger.transfer(caller, self.alias, msg_value, world)
         self.total_assets += msg_value
         self.total_shares += shares
         self.shares_of[caller] = self.shares_of.get(caller, 0.0) + shares
@@ -417,6 +426,7 @@ class ERC4626LikeVault:
         NO shares minted. The actual attack vector: donate() isn't a real
         function, this models sending the underlying asset straight to the
         vault's balance, bypassing deposit() accounting entirely."""
+        world.ledger.transfer(caller, self.alias, msg_value, world)
         self.total_assets += msg_value
         world.log(contract=self.alias, fn="donate", caller=caller, amount=msg_value)
 
@@ -615,7 +625,7 @@ class SelfLiquidationMarket:
         self.collateral[caller] = collateral_amt
         self.debt[caller] = debt_amt
         world.ledger.transfer(caller, self.alias, collateral_amt, world)
-        world.ledger.balances[caller] = world.ledger.balances.get(caller, 0.0) + debt_amt  # "borrowed" funds disbursed
+        world.ledger.transfer(self.alias, caller, debt_amt, world)
         world.log(contract=self.alias, fn="openPosition", caller=caller, collateral=collateral_amt, debt=debt_amt)
 
     def selfLiquidate(self, caller: str, world: MockWorld, msg_value: float = 0.0):
@@ -760,17 +770,28 @@ class MockExecutor:
         for alias, bal in scenario.initial_state.balances.items():
             ledger.balances[alias] = bal
 
+        for alias, contract in world.contracts.items():
+            if isinstance(contract, SimplePool):
+                ledger.balances.setdefault(alias, contract.reserve_a)
+                world.token_b_ledger.balances[alias] = contract.reserve_b
+
         before = {a: ledger.get(a) for a in list(world.contracts) + ["attacker"]}
 
         reverted, revert_reason = False, None
-        try:
-            for step in scenario.initial_state.custom_setup_calls + scenario.steps:
+        for step in scenario.initial_state.custom_setup_calls + scenario.steps:
+            # Copy contracts together so a market keeps its reference to the restored pool.
+            snapshot = deepcopy((world.ledger, world.token_b_ledger, world.contracts))
+            trace_length = len(world.call_trace)
+            try:
                 self._dispatch(step, world)
-        except MockRevert as e:
-            if not getattr(step, "expected_revert", False):
-                reverted, revert_reason = True, e.reason
+            except MockRevert as e:
+                world.ledger, world.token_b_ledger, world.contracts = snapshot
+                del world.call_trace[trace_length:]
+                if not step.expected_revert:
+                    reverted, revert_reason = True, e.reason
+                    break
 
-        after = {a: ledger.get(a) for a in list(world.contracts) + ["attacker"]}
+        after = {a: world.ledger.get(a) for a in list(world.contracts) + ["attacker"]}
 
         state_vars = {}
         for alias in set(list(before.keys()) + list(after.keys())):
