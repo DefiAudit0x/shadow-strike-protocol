@@ -20,6 +20,7 @@ from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import (
     AttackerModel,
     AttackScenario,
+    ExecutionResult,
     InitialState,
     ShadowStrikeValidationError,
     SuccessCondition,
@@ -271,6 +272,44 @@ class TestCompiler(unittest.TestCase):
         ):
             cmd_run_scenario(Namespace(file=scenario_path, engine="foundry", foundry_root=str(self.root)))
         run.assert_called_once()
+
+
+class TestVerifierEvaluationErrors(unittest.TestCase):
+    def test_evaluation_errors_fail_only_the_affected_condition(self):
+        for expression, message in (
+            ("1/0", "division by zero"),
+            ('"a" - 1', "unsupported operand type"),
+            ("missing > 0", "unknown identifier: 'missing'"),
+        ):
+            with self.subTest(expression=expression):
+                scenario = _make_scenario(success_conditions=[
+                    SuccessCondition(expression=expression, description="malformed"),
+                    SuccessCondition(expression="balance == 1", description="valid"),
+                ])
+                result = ExecutionResult(scenario.scenario_id, False, None, {"balance": 1}, {}, [])
+
+                verdict = Verifier().verify(scenario, result)
+
+                self.assertFalse(verdict.verified)
+                self.assertEqual(verdict.verdict, "error")
+                failed, valid = verdict.condition_results
+                self.assertFalse(failed["passed"])
+                self.assertIn(message, failed["error"])
+                self.assertTrue(valid["passed"])
+                self.assertIsNone(valid["error"])
+                self.assertEqual(verdict.proof_artifact["condition_results"], verdict.condition_results)
+
+    def test_invariant_evaluation_error_is_informational(self):
+        scenario = _make_scenario(
+            success_conditions=[SuccessCondition(expression="balance == 1", description="valid")],
+            invariants_under_test=["1/0"],
+        )
+        result = ExecutionResult(scenario.scenario_id, False, None, {"balance": 1}, {}, [])
+
+        verdict = Verifier().verify(scenario, result)
+
+        self.assertTrue(verdict.verified)
+        self.assertEqual(verdict.invariant_violations, ["1/0  (unevaluable: division by zero)"])
 
 
 class TestMockExecutorAndVerifier(unittest.TestCase):
