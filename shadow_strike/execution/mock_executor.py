@@ -115,7 +115,7 @@ class SafeVault(VulnerableVault):
 
 
 class ReentrantAttacker:
-    """Mirrors attack_library/reentrancy/attacker_template.sol.j2 semantics."""
+    """Models recursive withdrawals through the receiver callback."""
 
     def __init__(self, alias: str, target_alias: str, max_reentries: int = 3):
         self.alias = alias
@@ -330,8 +330,7 @@ class OracleFedLendingMarket:
 
 
 class OracleManipulationAttacker:
-    """Mirrors attack_library/oracle_manipulation/attacker_template.sol.j2:
-    swap to move the pool's spot price, then borrow against inflated
+    """Models oracle manipulation: swap to move the pool's spot price, then borrow against inflated
     collateral valuation, all within one logical "transaction"."""
 
     def __init__(self, alias: str, pool_alias: str, market_alias: str):
@@ -380,8 +379,7 @@ class SignedActionTarget:
 
 
 class SignatureReplayer:
-    """Mirrors attack_library/signature_replay/attacker_template.sol.j2's
-    replay() loop: submits the SAME signature_id N times."""
+    """Models signature replay: submits the SAME signature_id N times."""
 
     def __init__(self, alias: str, target_alias: str, times: int = 3):
         self.alias = alias
@@ -446,8 +444,7 @@ class ERC4626LikeVault:
 
 
 class ShareInflationAttacker:
-    """Mirrors attack_library/price_manipulation/attacker_template.sol.j2:
-    deposit the minimum first, then donate a large amount directly,
+    """Models share inflation: deposit the minimum first, then donate a large amount directly,
     inflating the share price before a victim's deposit lands."""
 
     def __init__(self, alias: str, vault_alias: str):
@@ -804,7 +801,7 @@ class MockExecutor:
                 "eth_balance_before": before.get(alias, 0.0),
                 "eth_balance_after": after.get(alias, 0.0),
             }
-        # convenience alias matching the attacker_template's "legitimate_entitlement"
+        # convenience alias for the verifier's "legitimate_entitlement"
         if "attacker" in state_vars:
             state_vars["attacker"]["legitimate_entitlement"] = scenario.attacker.initial_eth
 
