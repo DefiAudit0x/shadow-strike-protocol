@@ -26,6 +26,21 @@ from dataclasses import dataclass, field
 from shadow_strike.core.models import AttackScenario, ExecutionResult, ShadowStrikeValidationError
 
 
+def _round_balance(value: float) -> float:
+    """Round an emitted ETH balance to 12 significant digits.
+
+    The mock ledger is float-based, so a deposit/withdraw round trip can
+    leave residue in the last significant digits (e.g. 0.9000000000000001
+    for 0.9) that a strict > comparison would read as theft. Rounding to
+    12 significant digits removes that residue — float noise lives in
+    digits 15–16 — while preserving real gains at any scale, including
+    sub-1e-12 ones (4e-13 stays 4e-13). An absolute-decimal rounding
+    would erase those. The Foundry path needs no rounding: it derives
+    both sides from integer wei through the same conversion.
+    """
+    return float(f"{value:.12g}")
+
+
 class MockRevert(Exception):
     def __init__(self, reason: str):
         self.reason = reason
@@ -865,23 +880,18 @@ class MockExecutor:
 
         state_vars = {}
         for alias in set(list(before.keys()) + list(after.keys())):
-            # Round to 12 decimals: the mock ledger is float-based, so a
-            # deposit/withdraw round trip can leave ~1e-16 residue (e.g.
-            # 0.9000000000000001 for 0.9) that must not read as theft in a
-            # strict > comparison against the entitlement. 12 decimals is
-            # far below any real theft the mock models and far above the
-            # residue; the Foundry path needs no rounding — it derives both
-            # sides from integer wei through the same conversion.
+            # Round to 12 significant digits: kills float residue without
+            # erasing real gains at any scale (see _round_balance).
             state_vars[alias] = {
-                "eth_balance_before": round(before.get(alias, 0.0), 12),
-                "eth_balance_after": round(after.get(alias, 0.0), 12),
+                "eth_balance_before": _round_balance(before.get(alias, 0.0)),
+                "eth_balance_after": _round_balance(after.get(alias, 0.0)),
             }
         # Starting-capital baseline used by the reentrancy condition, which
         # compares gross ending balance against entitlement (not net gain
         # against the same starting balance). The baseline is the effective
         # starting funding captured after the balances overrides above.
         if "attacker" in state_vars:
-            state_vars["attacker"]["legitimate_entitlement"] = round(effective_attacker_funding, 12)
+            state_vars["attacker"]["legitimate_entitlement"] = _round_balance(effective_attacker_funding)
 
         # generic extension point: any mock contract exposing state_vars()
         # gets those merged in under its own alias, so success_conditions
