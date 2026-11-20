@@ -7,12 +7,9 @@ description: >
   deployer and become the owner/admin, or to re-initialize state later
   if the guard is merely absent rather than enforced once.
 
-default_invariants:
-  - "contract.initialized_by == contract.intended_deployer"
+default_invariants: []
 
-default_success_conditions:
-  - expression: "attacker.became_owner_via_initialize == true"
-    description: "Attacker front-ran or repeated initialize() to seize a privileged role"
+default_success_conditions: []
 
 heuristic_source_patterns:
   - pattern: 'function initialize('
