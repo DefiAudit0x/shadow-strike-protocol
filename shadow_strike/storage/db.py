@@ -70,7 +70,12 @@ class KnowledgeStore:
 
     # ---- scenarios --------------------------------------------------
     def save_scenario(self, scenario) -> str:
-        scenario_json = scenario.to_json(sort_keys=True)
+        # Store the scenario in the order it defines: sort_keys would
+        # reorder nested dicts such as initial_state.target_contracts,
+        # and the first key there is the primary target (cli.py picks
+        # next(iter(...))). Compare as exact text for the same reason —
+        # a reordered target_contracts is a different scenario.
+        scenario_json = scenario.to_json()
         with self.conn:
             result = self.conn.execute(
                 "INSERT INTO scenarios (id, vulnerability_class, target_protocol, scenario_json, created_at) "
@@ -83,7 +88,7 @@ class KnowledgeStore:
             )
             if result.rowcount == 0:
                 stored = self.get_scenario(scenario.scenario_id)
-                if json.dumps(json.loads(stored["scenario_json"]), sort_keys=True) != scenario_json:
+                if stored["scenario_json"] != scenario_json:
                     raise ValueError(f"Cannot change scenario {scenario.scenario_id}: it already has attempts")
         return scenario.scenario_id
 

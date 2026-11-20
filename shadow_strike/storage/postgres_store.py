@@ -105,7 +105,10 @@ class PostgresKnowledgeStore:
         self.Session = sessionmaker(bind=self.engine)
 
     def save_scenario(self, scenario) -> str:
-        scenario_json = scenario.to_json(sort_keys=True)
+        # See db.py: the stored JSON keeps the scenario's own key order
+        # (the first target_contracts key is the primary target), and
+        # the S02 comparison is exact text for the same reason.
+        scenario_json = scenario.to_json()
         definition = {
             "vulnerability_class": scenario.vulnerability_class.value,
             "target_protocol": scenario.target_protocol,
@@ -126,7 +129,7 @@ class PostgresKnowledgeStore:
                     attempts_table.select().where(attempts_table.c.scenario_id == scenario.scenario_id).limit(1)
                 ).first() is not None
                 if has_attempts:
-                    if json.dumps(json.loads(stored.scenario_json), sort_keys=True) != scenario_json:
+                    if stored.scenario_json != scenario_json:
                         raise ValueError(f"Cannot change scenario {scenario.scenario_id}: it already has attempts")
                 else:
                     session.execute(statement.on_conflict_do_update(
