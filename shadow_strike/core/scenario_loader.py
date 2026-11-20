@@ -50,6 +50,10 @@ def load_scenario_yaml(path: str | Path) -> AttackScenario:
     if not isinstance(raw, dict):
         raise ScenarioFileError(f"{path}: top level must be a mapping, got {type(raw).__name__}")
 
+    unknown = raw.keys() - AttackScenario.__dataclass_fields__.keys()
+    if unknown:
+        raise ScenarioFileError(f"{path}: unknown top-level field(s): {sorted(unknown)}")
+
     required_top = {"vulnerability_class", "target_protocol", "hypothesis", "initial_state", "steps", "success_conditions"}
     missing = required_top - raw.keys()
     if missing:
@@ -79,6 +83,7 @@ def load_scenario_yaml(path: str | Path) -> AttackScenario:
             assumptions=raw.get("assumptions", []),
             invariants_under_test=raw.get("invariants_under_test", []),
             max_retries=raw.get("max_retries", 3),
+            attacker_max_reentries=raw.get("attacker_max_reentries", 3),
         )
     except (TypeError, ValueError, ShadowStrikeValidationError) as e:
         # TypeError catches "unexpected keyword argument" from a typo'd
