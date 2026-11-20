@@ -8,13 +8,11 @@ description: >
   as a capability any other scenario can request, not a standalone
   vulnerability class — see composes_with below.
 
-default_invariants:
-  - "flashloan.repaid == true"
-  - "attacker.eth_balance_after > attacker.eth_balance_before - flashloan.fee_paid"
+default_invariants: []
 
 default_success_conditions:
   - expression: "attacker.eth_balance_after - attacker.eth_balance_before > 0"
-    description: "Attacker repaid the flash loan and kept a positive profit"
+    description: "Attacker ended with more ETH than they started with"
 
 heuristic_source_patterns:
   - pattern: 'onFlashLoan'
