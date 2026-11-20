@@ -25,7 +25,7 @@ executors, proving the call contract itself works end to end.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_node
 from shadow_strike.attack_library.registry import AttackLibrary
@@ -74,6 +74,21 @@ class AxiomVerdictResponse:
     tested_classes: list[dict]   # [{"vulnerability_class": ..., "status": ...}, ...]
     recommendation: str | None
     proof_artifact: dict | None = None
+    verdict: str = field(init=False)
+
+
+    def __post_init__(self):
+        self.verdict = self._classify_verdict()
+
+    def _classify_verdict(self) -> str:
+        if self.verified:
+            return "verified"
+        statuses = [row["status"] for row in self.tested_classes]
+        if any(s in ("error", "build_error") for s in statuses):
+            return "error"
+        if statuses and all(s == "resisted" for s in statuses):
+            return "resisted"
+        return "inconclusive"
 
 
 def handle_sentinel_request(
@@ -110,10 +125,17 @@ def _handle_single_class(request: SentinelHypothesisRequest, executors, library,
         "hypothesis": f"Sentinel-suspected {request.suspected_vulnerability_class} (no heuristic pattern matched locally)",
     }
 
-    scenario = builder(
-        hypothesis, request.target_contracts, request.attacker_initial_eth,
-        request.fork_url, request.fork_block, library, request.target_protocol, state,
-    )
+    try:
+        scenario = builder(
+            hypothesis, request.target_contracts, request.attacker_initial_eth,
+            request.fork_url, request.fork_block, library, request.target_protocol, state,
+        )
+    except Exception as e:  # noqa: BLE001 — report boundary failures as errors
+        return AxiomVerdictResponse(
+            request_id=request.request_id, verified=False, severity=None, scenario_id=None,
+            tested_classes=[{"vulnerability_class": request.suspected_vulnerability_class, "status": "error"}],
+            recommendation=f"planner error: {e}",
+        )
     executor = executors.get(request.suspected_vulnerability_class)
     if executor is None:
         return AxiomVerdictResponse(
@@ -123,11 +145,18 @@ def _handle_single_class(request: SentinelHypothesisRequest, executors, library,
                             "nothing was actually executed, this is NOT a verdict",
         )
 
-    result = execute_scenario(executor, scenario)
-    verdict = Verifier().verify(scenario, result)
+    try:
+        result = execute_scenario(executor, scenario)
+        verdict = Verifier().verify(scenario, result)
+    except Exception as e:  # noqa: BLE001 — report boundary failures as errors
+        return AxiomVerdictResponse(
+            request_id=request.request_id, verified=False, severity=None, scenario_id=scenario.scenario_id,
+            tested_classes=[{"vulnerability_class": request.suspected_vulnerability_class, "status": "error"}],
+            recommendation=f"harness error: {e}",
+        )
     save_run(store, scenario, result, verdict,
              failure_reason=result.revert_reason or "success conditions not met")
-    status = "exploitable" if verdict.verified else "resisted"
+    status = "exploitable" if verdict.verified else verdict.verdict
 
     return AxiomVerdictResponse(
         request_id=request.request_id,
