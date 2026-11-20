@@ -31,6 +31,7 @@ from shadow_strike.agent.nodes import SCENARIO_BUILDERS, hypothesis_node, recon_
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.benchmark.runner import BenchmarkReport, run_benchmark
 from shadow_strike.execution.foundry_runner import execute_scenario
+from shadow_strike.storage.persistence import run_store, save_run
 from shadow_strike.verifier.verifier import Verifier
 
 SEVERITY_BY_CLASS = {
@@ -79,15 +80,18 @@ def handle_sentinel_request(
     request: SentinelHypothesisRequest,
     executors: dict[str, object],
     library: AttackLibrary | None = None,
+    store=None,
+    db_path: str = "shadow_strike_knowledge.sqlite3",
 ) -> AxiomVerdictResponse:
     library = library or AttackLibrary()
 
-    if request.suspected_vulnerability_class:
-        return _handle_single_class(request, executors, library)
-    return _handle_full_benchmark(request, executors, library)
+    with run_store(store, db_path) as active_store:
+        if request.suspected_vulnerability_class:
+            return _handle_single_class(request, executors, library, active_store)
+        return _handle_full_benchmark(request, executors, library, active_store)
 
 
-def _handle_single_class(request: SentinelHypothesisRequest, executors, library) -> AxiomVerdictResponse:
+def _handle_single_class(request: SentinelHypothesisRequest, executors, library, store) -> AxiomVerdictResponse:
     builder = SCENARIO_BUILDERS.get(request.suspected_vulnerability_class)
     if builder is None:
         return AxiomVerdictResponse(
@@ -121,6 +125,8 @@ def _handle_single_class(request: SentinelHypothesisRequest, executors, library)
 
     result = execute_scenario(executor, scenario)
     verdict = Verifier().verify(scenario, result)
+    save_run(store, scenario, result, verdict,
+             failure_reason=result.revert_reason or "success conditions not met")
     status = "exploitable" if verdict.verified else "resisted"
 
     return AxiomVerdictResponse(
@@ -134,14 +140,14 @@ def _handle_single_class(request: SentinelHypothesisRequest, executors, library)
     )
 
 
-def _handle_full_benchmark(request: SentinelHypothesisRequest, executors, library) -> AxiomVerdictResponse:
+def _handle_full_benchmark(request: SentinelHypothesisRequest, executors, library, store) -> AxiomVerdictResponse:
     report: BenchmarkReport = run_benchmark(
         target_contract_source=request.source_code,
         target_protocol_name=request.target_protocol,
         target_contracts=request.target_contracts,
         executors=executors,
         fork_url=request.fork_url, fork_block=request.fork_block,
-        attacker_initial_eth=request.attacker_initial_eth, library=library,
+        attacker_initial_eth=request.attacker_initial_eth, library=library, store=store,
     )
     exploitable = [r for r in report.results if r.status == "exploitable"]
     tested_classes = [{"vulnerability_class": r.vulnerability_class, "status": r.status} for r in report.results]
