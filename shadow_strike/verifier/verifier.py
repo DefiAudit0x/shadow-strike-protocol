@@ -13,6 +13,33 @@ from shadow_strike.core.safe_eval import safe_eval
 
 class Verifier:
     def verify(self, scenario: AttackScenario, execution_result: ExecutionResult) -> VerificationResult:
+        if execution_result.scenario_id != scenario.scenario_id:
+            mismatch_reason = (
+                f"scenario_id mismatch: expected {scenario.scenario_id!r}, "
+                f"got {execution_result.scenario_id!r}"
+            )
+            condition_results = [{
+                "expression": cond.expression,
+                "description": cond.description,
+                "passed": False,
+                "error": mismatch_reason,
+            } for cond in scenario.success_conditions]
+            proof_artifact = {
+                "verdict": "error",
+                "error": mismatch_reason,
+                "scenario": scenario.to_dict(),
+                "execution_scenario_id": execution_result.scenario_id,
+                "engine": execution_result.engine,
+            }
+            return VerificationResult(
+                scenario_id=scenario.scenario_id,
+                verified=False,
+                verdict="error",
+                condition_results=condition_results,
+                invariant_violations=[],
+                proof_artifact=proof_artifact,
+            )
+
         condition_results = []
         for cond in scenario.success_conditions:
             try:
