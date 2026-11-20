@@ -184,3 +184,89 @@ def test_7b_entitlement_follows_balances_override():
     ))
     source = ScenarioCompiler().compile(data)
     assert 'emit log_named_uint("ss.attacker.legitimate_entitlement", 3.0 ether);' in source
+
+
+def test_k01_k02_k03_regenerated_artifact_runs_end_to_end(tmp_path):
+    """K01/K02/K03: a regenerated reentrancy artifact from a placeholder-vault
+    scenario must compile in forge and complete the scenario with the
+    expected balance movements.
+
+    K01: the emitted imports must use ../../src/... (a single-../ import
+    does not resolve from contracts/test/generated/ — the 4 stale files
+    removed in this fix broke `forge build` exactly this way).
+    K02: the placeholder vault address must be replaced by a deployed
+    local Vault seeded from the scenario's balances.
+    K03: the attack() entry-point call must not be pranked as the
+    receiver (its owner check would reject it), so the scenario runs.
+    On the old generator this test fails three ways: the source keeps
+    the placeholder, attack() is pranked (forge test reverts "not
+    owner"), and the profit assertion fails.
+    """
+    if not os.environ.get("FOUNDRY_SOLC"):
+        pytest.skip("needs the Foundry toolchain (FOUNDRY_SOLC)")
+    forge = shutil.which("forge")
+    if forge is None:
+        pytest.skip("forge binary not on PATH")
+    root = Path(__file__).resolve().parents[1]
+    shutil.copytree(root / "contracts/src", tmp_path / "contracts/src")
+    shutil.copy(root / "foundry.toml", tmp_path / "foundry.toml")
+    data = scenario(
+        scenario_id="k02k03",
+        attacker=AttackerModel(initial_eth=1.0),
+        initial_state=InitialState(
+            fork_url="", fork_block=0,
+            target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+            balances={"vault": 9.0},
+        ),
+        steps=[
+            TransactionStep(1, "attacker", "vault", "deposit()", value_eth=0.9),
+            TransactionStep(2, "attacker", "attacker", "attack()"),
+        ],
+        success_conditions=[SuccessCondition(
+            "attacker.eth_balance_after - attacker.eth_balance_before"
+            " > attacker.legitimate_entitlement", "observation",
+        )],
+    )
+    compiler = ScenarioCompiler(target_types={"vault": "IVault"})
+    out = tmp_path / "contracts/test/generated"
+    path = compiler.compile_to_file(data, out, attacker_contract_name="MaliciousReceiver_demo")
+    source = path.read_text()
+    # K01: no single-../ import can be produced.
+    assert '"../interfaces/' not in source and '"../src/attackers/' not in source
+    assert '"../../src/interfaces/IVault.sol"' in source
+    # The demo receiver is defined inline by the template when it is the
+    # bounded receiver (so no attacker import is emitted for this name);
+    # the K01 guard is that every emitted import uses ../../.
+    assert "contract MaliciousReceiver_demo {" in source
+    # K02: the placeholder is replaced by a deployed Vault.
+    assert "0x1111111111111111111111111111111111111111" not in source
+    assert "new Vault()" in source
+    assert '"../../src/Vault.sol"' in source
+    # K03: the deposit step is pranked as the receiver (needed), but the
+    # attack() entry-point call is not.
+    assert source.count("vm.prank(address(attacker));") == 1
+    lines = source.splitlines()
+    attack_at = next(i for i, line in enumerate(lines) if "attacker.attack();" in line)
+    assert "vm.prank" not in lines[attack_at - 1]
+    build = subprocess.run(
+        [forge, "build", "--root", str(tmp_path), "--offline"],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
+    run = subprocess.run(
+        [forge, "test", "--root", str(tmp_path), "--offline",
+         "--match-contract", "ShadowStrike_k02k03", "-vv"],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    logs = {}
+    for line in run.stdout.splitlines():
+        line = line.strip()
+        for key in ("attacker_eth_before", "attacker_eth_after"):
+            if line.startswith(key + ":"):
+                logs[key] = int(line.split(":", 1)[1].strip())
+    assert set(logs) == {"attacker_eth_before", "attacker_eth_after"}, run.stdout
+    # 1.0 ETH start, 0.9 deposited, 4 x 0.9 withdrawn: 3.7 after, +2.7 net.
+    assert logs["attacker_eth_before"] == 10 ** 18
+    assert logs["attacker_eth_after"] == 37 * 10 ** 17
+    assert logs["attacker_eth_after"] - logs["attacker_eth_before"] == 27 * 10 ** 17
