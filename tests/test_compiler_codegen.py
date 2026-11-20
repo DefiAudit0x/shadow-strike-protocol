@@ -171,3 +171,16 @@ def test_e06_shared_path_deploys_bounded_receiver():
     assert "attacker = new ShadowStrikeBoundedReceiver(address(custom), 3);" in source
     assert "reentryCount < MAX_REENTRIES" in source
     assert "attacker.attack();" in source
+
+
+def test_7b_entitlement_follows_balances_override():
+    """CodeRabbit follow-up on PR #29 (Fix 7b): the emitted entitlement must
+    follow the attacker's effective funding when initial_state.balances
+    overrides initial_eth — otherwise the Foundry path funds the attacker
+    with the override but judges it against initial_eth."""
+    data = scenario(initial_state=InitialState(
+        fork_url="", fork_block=0, target_contracts={"custom": ADDRESS},
+        balances={"attacker": 3.0},
+    ))
+    source = ScenarioCompiler().compile(data)
+    assert 'emit log_named_uint("ss.attacker.legitimate_entitlement", 3.0 ether);' in source
