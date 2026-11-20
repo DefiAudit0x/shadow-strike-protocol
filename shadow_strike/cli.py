@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
+from shadow_strike.agent.llm_providers import LLMProviderError, build_llm_fn
 from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import AttackScenario
 from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
@@ -51,8 +52,16 @@ def cmd_run(args):
         executor = MockExecutor(contract_kinds=kinds)
 
     store = KnowledgeStore(db_path=args.db)
+    try:
+        llm_fn = build_llm_fn(
+            getattr(args, "llm_provider", None), getattr(args, "llm_api_key", None),
+        )
+    except LLMProviderError as e:
+        print(f"LLM ERROR: {e}", file=sys.stderr)
+        sys.exit(2)
     graph = SimpleShadowStrikeGraph(
         executor=executor, verifier=Verifier(), library=AttackLibrary(), max_retries=args.max_retries,
+        llm_fn=llm_fn,
     )
 
     def on_step(label, state):
@@ -198,6 +207,12 @@ def main():
     p_run.add_argument("--foundry-root", default=".")
     p_run.add_argument("--mock-kinds", action="append", help="alias=VulnerableVault|SafeVault|ReentrantAttacker")
     p_run.add_argument("--db", default="shadow_strike_knowledge.sqlite3")
+    # Part 10: the LLM proposes hypotheses; the deterministic verifier
+    # still decides the verdict. "echo" is the offline test double.
+    p_run.add_argument("--llm-provider", choices=["anthropic", "echo"], default=None,
+                       help="LLM provider for hypothesis generation (default: heuristics only)")
+    p_run.add_argument("--llm-api-key", default=None,
+                       help="Anthropic API key (or set ANTHROPIC_API_KEY)")
     p_run.set_defaults(func=cmd_run)
 
     p_lib = sub.add_parser("library", help="list attack library vulnerability classes")
