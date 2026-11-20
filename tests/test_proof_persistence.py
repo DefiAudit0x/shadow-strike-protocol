@@ -1,10 +1,12 @@
 """Part 11: real entry points persist evidence linked to successful attempts."""
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.util
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -142,30 +144,52 @@ class TestProofPersistence(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("fastapi") and importlib.util.find_spec("httpx"),
                          "requires optional API dependencies")
     def test_api_routes_persist_to_configured_database(self):
-        from fastapi.testclient import TestClient
+        import httpx
 
         from shadow_strike.api import main as api
 
-        store = KnowledgeStore(self.db)
-        self.addCleanup(store.close)
         payload = {"source_code": SOURCE, "protocol_name": "Vault", "target_contracts": {"vault": "0xabc"}}
         config = {"reentrancy": {"contract_kinds": {
             "vault": "VulnerableVault", "attacker": "ReentrantAttacker",
         }}}
-        with patch.object(api, "store", store), TestClient(api.app) as client:
-            response = client.post("/runs", json=payload)
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertTrue(response.json()["verified"])
-            response = client.post("/benchmark", json={**payload, "executor_config": config})
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json()["results"][0]["status"], "exploitable")
-            response = client.post("/sentinel/hypothesis", json={
-                "request_id": "r1", "target_protocol": "Vault", "source_code": SOURCE,
-                "target_contracts": {"vault": "0xabc"}, "executor_config": config,
-                "suspected_vulnerability_class": "reentrancy",
-            })
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertTrue(response.json()["verified"])
+        token = "proof-persistence-test"
+        async def run_api_jobs():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=api.app), base_url="http://test",
+            ) as client:
+                async def run_job(path, body):
+                    response = await client.post(
+                        path, json=body, headers={"Authorization": f"Bearer {token}"},
+                    )
+                    self.assertEqual(response.status_code, 202, response.text)
+                    job_id = response.json()["job_id"]
+                    for _ in range(100):
+                        status = await client.get(
+                            f"/jobs/{job_id}", headers={"Authorization": f"Bearer {token}"},
+                        )
+                        self.assertEqual(status.status_code, 200, status.text)
+                        if status.json()["status"] in ("complete", "failed"):
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertEqual(status.json()["status"], "complete", status.text)
+                    return status.json()["result"]
+
+                result = await run_job("/runs", payload)
+                self.assertTrue(result["verified"])
+                result = await run_job("/benchmark", {**payload, "executor_config": config})
+                self.assertEqual(result["results"][0]["status"], "exploitable")
+                result = await run_job("/sentinel/hypothesis", {
+                    "request_id": "r1", "target_protocol": "Vault", "source_code": SOURCE,
+                    "target_contracts": {"vault": "0xabc"}, "executor_config": config,
+                    "suspected_vulnerability_class": "reentrancy",
+                })
+                self.assertTrue(result["verified"])
+
+        with patch.dict(os.environ, {
+            "SHADOW_STRIKE_API_TOKEN": token,
+            "SHADOW_STRIKE_DB_PATH": str(self.db),
+        }):
+            asyncio.run(run_api_jobs())
         self.assert_stored(3)
 
 
