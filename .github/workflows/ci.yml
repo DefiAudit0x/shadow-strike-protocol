@@ -23,6 +23,17 @@ jobs:
       - name: Install core and test dependencies
         run: pip install -e ".[dev]"
 
+      # The demo gates on a real `forge build` of the rendered contract
+      # (Fix 13 / X02) and one regression test runs forge directly, so
+      # Foundry + forge-std must exist in this job, not only in
+      # foundry-tests.
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.9.0
+      - name: Install forge-std
+        run: forge install foundry-rs/forge-std@v1.9.7 --no-git
+
       - name: Run test suite
         run: python -m pytest -v
 
