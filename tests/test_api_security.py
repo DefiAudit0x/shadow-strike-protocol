@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import patch
 
@@ -90,6 +92,284 @@ class TestAPISecurity(unittest.TestCase):
             completed = self.poll(body["job_id"])
         self.assertEqual(completed["status"], "complete")
         self.assertEqual(completed["result"]["scenario_id"], "s")
+
+    def run_payload(self, **overrides):
+        return {
+            "source_code": "contract Vault {}", "protocol_name": "Vault",
+            "target_contracts": {"vault": "0x1111111111111111111111111111111111111111"},
+            **overrides,
+        }
+
+    def test_stored_evidence_requires_auth_and_redacts_legacy_secrets(self):
+        from shadow_strike.storage.db import KnowledgeStore
+
+        evidence = {
+            "fork_url": "https://rpc-user:rpc-password@rpc.example/path-token?api_key=query-token",
+            "nested": [{"api_key": "old-api-key", "password": "old-password"}],
+            "log": "RPC failed: https://rpc.example/path-secret?token=log-secret",
+            "safe": "kept",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "legacy.sqlite3")
+            with patch.dict(os.environ, {self.api.DB_PATH_ENV: db_path}):
+                store = KnowledgeStore(db_path)
+                store.save_attempt("legacy", 1, "failure", evidence["log"], evidence, evidence)
+                store.add_library_entry("reentrancy", evidence)
+                store.close()
+
+                denied = self.request("GET", "/runs/legacy")
+                self.assertEqual(denied.status_code, 401, denied.text)
+                for route, field in (
+                    ("/runs/legacy", "execution_result_json"),
+                    ("/attack-library/reentrancy", "scenario_template_json"),
+                ):
+                    with self.subTest(route=route):
+                        response = self.request("GET", route, headers=self.auth())
+                        self.assertEqual(response.status_code, 200, response.text)
+                        row = response.json()[0]
+                        sanitized = json.loads(row[field])
+                        self.assertEqual(sanitized["fork_url"], "[REDACTED]")
+                        self.assertEqual(sanitized["safe"], "kept")
+                        for secret in ("rpc-password", "path-token", "query-token", "old-api-key",
+                                       "old-password", "path-secret", "log-secret"):
+                            self.assertNotIn(secret, response.text)
+
+    def test_plural_credential_keys_are_redacted(self):
+        """Fix 9b (CodeRabbit Major on PR #31): a prefixed plural key such
+        as rpc_credentials normalizes to "rpccredentials", which matched
+        neither the singular "credential" suffix nor the exact
+        "credentials" name, so the secret survived redaction on the
+        public library route."""
+        from shadow_strike.storage.db import KnowledgeStore
+
+        evidence = {
+            # Opaque non-URL values on purpose: a URL value would be
+            # redacted by the regex alone, so it would not prove the
+            # plural suffix is what redacts the key.
+            "rpc_credentials": "opaque-rpc-credential",
+            "rpc_tokens": "tok-secret",
+            "api_secrets": "api-secret",
+            "safe": "kept",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "legacy.sqlite3")
+            with patch.dict(os.environ, {self.api.DB_PATH_ENV: db_path}):
+                store = KnowledgeStore(db_path)
+                store.add_library_entry("reentrancy", evidence)
+                store.close()
+                # The library route is public (no bearer token) — that is
+                # exactly why the redaction must catch these keys.
+                response = self.request("GET", "/attack-library/reentrancy")
+                self.assertEqual(response.status_code, 200, response.text)
+                row = response.json()[0]
+                sanitized = json.loads(row["scenario_template_json"])
+                self.assertEqual(sanitized["rpc_credentials"], "[REDACTED]")
+                self.assertEqual(sanitized["rpc_tokens"], "[REDACTED]")
+                self.assertEqual(sanitized["api_secrets"], "[REDACTED]")
+                self.assertEqual(sanitized["safe"], "kept")
+                for secret in ("opaque-rpc-credential", "tok-secret", "api-secret"):
+                    self.assertNotIn(secret, response.text)
+
+    def test_json_encoded_string_evidence_is_sanitized(self):
+        """Fix 9b (CodeRabbit Major on PR #31): a stored log that is a
+        JSON-encoded string with escaped slashes decodes to a bare URL,
+        but the redactor only sanitized decoded objects/lists and ran its
+        regex over the escaped original — which never matches `://` — so
+        the credential survived."""
+        from shadow_strike.storage.db import KnowledgeStore
+
+        evidence = {
+            "log": '"https:\\/\\/rpc.example\\/path-secret"',
+            "safe": "kept",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / "legacy.sqlite3")
+            with patch.dict(os.environ, {self.api.DB_PATH_ENV: db_path}):
+                store = KnowledgeStore(db_path)
+                store.save_attempt("legacy", 1, "failure", evidence["log"], evidence, evidence)
+                store.close()
+                response = self.request("GET", "/runs/legacy", headers=self.auth())
+                self.assertEqual(response.status_code, 200, response.text)
+                row = response.json()[0]
+                sanitized = json.loads(row["execution_result_json"])
+                # The field stays a JSON-encoded string — only its decoded
+                # content is sanitized.
+                self.assertEqual(json.loads(sanitized["log"]), "[REDACTED]")
+                self.assertEqual(sanitized["safe"], "kept")
+                self.assertNotIn("path-secret", response.text)
+
+    def test_job_evidence_and_errors_redact_credentials(self):
+        for fails in (False, True):
+            with self.subTest(fails=fails):
+                future = Future()
+                if fails:
+                    future.set_exception(ValueError("Authorization: Bearer private-token"))
+                else:
+                    future.set_result({"proof": {"fork_url": "https://user:password@example/token",
+                                                 "access_token": "private-token"}})
+                with patch.object(self.api, "_jobs", {}), \
+                        patch.object(self.api._job_executor, "submit", return_value=future):
+                    job = self.api._queue_job(dict)
+                    response = self.request("GET", f"/jobs/{job['job_id']}", headers=self.auth())
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["status"], "failed" if fails else "complete")
+                self.assertNotIn("private-token", response.text)
+                self.assertNotIn("password", response.text)
+
+    def test_job_capacity_rejects_before_submitting_work(self):
+        for state in ("pending", "running", "complete", "failed"):
+            with self.subTest(state=state):
+                future = Future()
+                if state == "running":
+                    future.set_running_or_notify_cancel()
+                elif state == "complete":
+                    future.set_result({})
+                elif state == "failed":
+                    future.set_exception(ValueError("failed"))
+                with patch.object(self.api, "_jobs", {}), \
+                        patch.object(self.api, "MAX_TRACKED_JOBS", 1), \
+                        patch.object(self.api._job_executor, "submit", return_value=future) as submit:
+                    first = self.request("POST", "/runs", headers=self.auth(), json=self.run_payload())
+                    second = self.request("POST", "/runs", headers=self.auth(), json=self.run_payload())
+                    self.assertEqual(first.status_code, 202, first.text)
+                    self.assertEqual(second.status_code, 503, second.text)
+                    self.assertIn("capacity", second.json()["detail"])
+                    self.assertEqual(len(self.api._jobs), 1)
+                    submit.assert_called_once()
+
+    def test_terminal_jobs_expire_from_completion_on_access_and_submission(self):
+        for fails in (False, True):
+            for cleanup in ("access", "submission"):
+                with self.subTest(fails=fails, cleanup=cleanup):
+                    future = Future()
+                    with patch.object(self.api, "_jobs", {}), \
+                            patch.object(self.api, "MAX_TRACKED_JOBS", 1), \
+                            patch.object(self.api, "monotonic", return_value=0) as clock, \
+                            patch.object(self.api._job_executor, "submit", return_value=future):
+                        job = self.api._queue_job(dict)
+                        clock.return_value = self.api.JOB_RETENTION_SECONDS * 2
+                        active = self.request("GET", f"/jobs/{job['job_id']}", headers=self.auth())
+                        self.assertEqual(active.status_code, 200, active.text)
+                        if fails:
+                            future.set_exception(ValueError("failed"))
+                        else:
+                            future.set_result({"ok": True})
+                        clock.return_value += self.api.JOB_RETENTION_SECONDS - 1
+                        self.assertEqual(self.poll(job["job_id"])["status"], "failed" if fails else "complete")
+                        clock.return_value += 1
+                        if cleanup == "submission":
+                            replacement = self.request("POST", "/runs", headers=self.auth(), json=self.run_payload())
+                            self.assertEqual(replacement.status_code, 202, replacement.text)
+                        expired = self.request("GET", f"/jobs/{job['job_id']}", headers=self.auth())
+                        self.assertEqual(expired.status_code, 404, expired.text)
+                        self.assertNotIn(job["job_id"], self.api._jobs)
+
+    def test_unknown_engine_rejected_without_queuing(self):
+        with patch.object(self.api, "_queue_job") as queue:
+            response = self.request("POST", "/runs", headers=self.auth(),
+                                    json=self.run_payload(engine="foudnry"))
+        self.assertEqual(response.status_code, 422, response.text)
+        queue.assert_not_called()
+
+    def test_job_result_reports_selected_engine(self):
+        for engine in ("mock", "foundry"):
+            with self.subTest(engine=engine), \
+                    patch.object(self.api, "SimpleShadowStrikeGraph") as graph, \
+                    patch.object(self.api, "MockExecutor") as mock_executor, \
+                    patch("shadow_strike.execution.foundry_runner.ForgeRunner") as foundry_executor:
+                graph.return_value.run.return_value = {
+                    "current_scenario": None, "stopped_reason": "done", "final_proof": None, "history": [],
+                }
+                response = self.request("POST", "/runs", headers=self.auth(), json=self.run_payload(engine=engine))
+                self.assertEqual(response.status_code, 202, response.text)
+                completed = self.poll(response.json()["job_id"])
+                self.assertEqual(completed["status"], "complete")
+                self.assertEqual(completed["result"]["engine"], engine)
+                selected = mock_executor if engine == "mock" else foundry_executor
+                unused = foundry_executor if engine == "mock" else mock_executor
+                selected.assert_called_once()
+                unused.assert_not_called()
+                self.assertIs(graph.call_args.kwargs["executor"], selected.return_value)
+
+    def test_schema_bounds_reject_invalid_requests_before_queuing(self):
+        for route in ("/runs", "/benchmark", "/sentinel/hypothesis"):
+            invalid = {"target_contracts": {}, "fork_block": -1, "attacker_initial_eth": -1}
+            if route == "/runs":
+                invalid["max_retries"] = -1
+            for field, value in invalid.items():
+                with self.subTest(route=route, field=field), patch.object(self.api, "_queue_job") as queue:
+                    payload = self.run_payload(**{field: value})
+                    if route == "/sentinel/hypothesis":
+                        payload.update(request_id="r", target_protocol="Vault")
+                    response = self.request("POST", route, headers=self.auth(), json=payload)
+                    self.assertEqual(response.status_code, 422, response.text)
+                    queue.assert_not_called()
+
+    def test_schema_zero_boundaries_are_accepted(self):
+        for route in ("/runs", "/benchmark", "/sentinel/hypothesis"):
+            with self.subTest(route=route), patch.object(self.api, "_queue_job", return_value={"job_id": "j"}) as queue:
+                payload = self.run_payload(fork_block=0, attacker_initial_eth=0, max_retries=0)
+                if route == "/sentinel/hypothesis":
+                    payload.update(request_id="r", target_protocol="Vault")
+                response = self.request("POST", route, headers=self.auth(), json=payload)
+                self.assertEqual(response.status_code, 202, response.text)
+                queue.assert_called_once()
+
+    def test_text_plain_body_returns_422(self):
+        """Fix 9c (CodeRabbit Minor on PR #31): with Content-Type:
+        text/plain the validation error carries the raw body bytes; the
+        handler must convert them before sanitizing, or the 422 response
+        itself fails to serialize and the client gets a 500."""
+        import httpx
+
+        async def send(route):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.api.app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                return await client.post(
+                    route,
+                    headers={**self.auth(), "Content-Type": "text/plain"},
+                    content=b"{}",
+                )
+
+        for route in ("/runs", "/benchmark", "/sentinel/hypothesis"):
+            with self.subTest(route=route), patch.object(self.api, "_queue_job") as queue:
+                response = asyncio.run(send(route))
+                self.assertEqual(response.status_code, 422, response.text)
+                queue.assert_not_called()
+
+    def test_nonfinite_floats_return_422_not_500(self):
+        """Fix 9b (CodeRabbit Minor on PR #31): NaN/Infinity in
+        attacker_initial_eth made the validation-error response itself
+        fail serialization (Starlette rejects non-finite floats), so the
+        client got a 500 instead of the documented 422."""
+        import httpx
+
+        async def send(route, payload):
+            # Send the body raw: httpx's json= encodes strictly (allow_nan=False)
+            # and would raise client-side before the request is sent, while the
+            # server's json.loads accepts NaN/Infinity literals.
+            body = json.dumps(payload)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.api.app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                return await client.post(
+                    route,
+                    headers={**self.auth(), "Content-Type": "application/json"},
+                    content=body,
+                )
+
+        for route in ("/runs", "/benchmark", "/sentinel/hypothesis"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(route=route, value=value), patch.object(self.api, "_queue_job") as queue:
+                    payload = self.run_payload(attacker_initial_eth=value)
+                    if route == "/sentinel/hypothesis":
+                        payload.update(request_id="r", target_protocol="Vault")
+                    response = asyncio.run(send(route, payload))
+                    self.assertEqual(response.status_code, 422, response.text)
+                    queue.assert_not_called()
 
     def test_attack_library_hides_internal_paths(self):
         response = self.request("GET", "/attack-library")

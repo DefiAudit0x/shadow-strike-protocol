@@ -8,15 +8,23 @@ for completion. SQLite storage is opened only when a request uses it.
 from __future__ import annotations
 
 import hmac
+import json
+import math
 import os
+import re
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from threading import Lock
+from time import monotonic
 from typing import Literal
 
 try:
-    from fastapi import Depends, FastAPI, Header, HTTPException
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
 except ImportError as e:
     raise ImportError(
@@ -37,13 +45,90 @@ API_TOKEN_ENV = "SHADOW_STRIKE_API_TOKEN"
 DB_PATH_ENV = "SHADOW_STRIKE_DB_PATH"
 
 app = FastAPI(title="Shadow Strike Protocol API")
+
+
+def _sanitize_for_json(value):
+    """Replace non-finite floats (NaN/Infinity) with strings so error
+    details stay JSON-serializable. FastAPI's default validation-error
+    handler can 500 on older FastAPI/Starlette releases when the detail
+    carries a non-finite float (e.g. NaN rejected by allow_inf_nan=False),
+    because Starlette serializes responses with allow_nan=False."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _sanitize_for_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_for_json(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Same shape as FastAPI's default handler ({"detail": errors}, 422).
+    # jsonable_encoder first, as the default handler does: it converts
+    # non-JSON-native values in the error detail — e.g. the raw body bytes
+    # of a text/plain request — to strings. _sanitize_for_json then
+    # replaces non-finite floats (NaN/Infinity) that the encoder leaves
+    # as-is, so the response itself always serializes.
+    encoded = jsonable_encoder(exc.errors())
+    return JSONResponse(status_code=422, content={"detail": _sanitize_for_json(encoded)})
+
+
 library = AttackLibrary()
 
 # This queue is process-local. The bounded worker pool keeps requests from
 # blocking while still limiting concurrent host executions.
 _job_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="shadow-strike-api")
-_jobs: dict[str, Future] = {}
+MAX_TRACKED_JOBS = 128
+JOB_RETENTION_SECONDS = 3600
+
+
+@dataclass
+class _Job:
+    future: Future
+    completed_at: float | None = None
+
+
+_jobs: dict[str, _Job] = {}
 _jobs_lock = Lock()
+
+
+def _redact_evidence(value):
+    """Sanitize response copies, including legacy JSON stored as SQLite TEXT.
+
+    RPC credentials can live in URL paths as well as userinfo/query strings, so
+    suppress whole URLs even inside logs or other free-form evidence fields.
+    """
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            name = re.sub(r"[^a-z0-9]", "", key.lower())
+            # Singular AND plural suffixes: a prefixed plural such as
+            # rpc_credentials normalizes to "rpccredentials", which matches
+            # neither the singular suffix nor an exact "credentials" name.
+            sensitive = name.endswith((
+                "url", "urls", "password", "passwords", "secret", "secrets",
+                "token", "tokens", "apikey", "apikeys", "credential", "credentials",
+            ))
+            result[key] = "[REDACTED]" if sensitive or name in {
+                "authorization", "proxyauthorization", "credentials", "privatekey",
+            } else _redact_evidence(item)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_redact_evidence(item) for item in value]
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            decoded = None
+        # A decoded JSON string can itself be a bare URL (possibly with
+        # escaped slashes, which the regex below never matches) — sanitize
+        # the decoded value and re-encode it instead of regexing the
+        # escaped original.
+        if isinstance(decoded, (dict, list, str)):
+            return json.dumps(_redact_evidence(decoded))
+        return re.sub(r"\b(?:https?|wss?)://[^\s<>\"'\\]+", "[REDACTED]", value, flags=re.IGNORECASE)
+    return value
 
 
 async def require_bearer_token(authorization: str | None = Header(default=None)) -> None:
@@ -79,10 +164,31 @@ def _reject_fork_url(fork_url: str) -> None:
 
 def _queue_job(work: Callable[[], dict]) -> dict[str, str]:
     job_id = uuid.uuid4().hex
-    future = _job_executor.submit(work)
     with _jobs_lock:
-        _jobs[job_id] = future
+        _cleanup_jobs()
+        if len(_jobs) >= MAX_TRACKED_JOBS:
+            raise HTTPException(status_code=503, detail="Job capacity reached; retry later.")
+        job = _Job(_job_executor.submit(work))
+        _jobs[job_id] = job
+
+    def completed(_future):
+        with _jobs_lock:
+            job.completed_at = monotonic()
+
+    # A completed future invokes callbacks synchronously; register outside the lock.
+    job.future.add_done_callback(completed)
     return {"job_id": job_id, "status": "queued"}
+
+
+def _cleanup_jobs() -> None:
+    """Expire terminal jobs; caller holds _jobs_lock. Active work is never evicted."""
+    now = monotonic()
+    expired = [
+        job_id for job_id, job in _jobs.items()
+        if job.completed_at is not None and now - job.completed_at >= JOB_RETENTION_SECONDS
+    ]
+    for job_id in expired:
+        del _jobs[job_id]
 
 
 def _execute_run(req: RunRequest) -> dict:
@@ -90,9 +196,11 @@ def _execute_run(req: RunRequest) -> dict:
         from shadow_strike.execution.foundry_runner import ForgeRunner
 
         executor = ForgeRunner(foundry_project_root=".")
-    else:
+    elif req.engine == "mock":
         kinds = {next(iter(req.target_contracts)): "VulnerableVault", "attacker": "ReentrantAttacker"}
         executor = MockExecutor(contract_kinds=kinds)
+    else:
+        raise ValueError("Unsupported execution engine")
 
     graph = SimpleShadowStrikeGraph(
         executor=executor,
@@ -123,6 +231,7 @@ def _execute_run(req: RunRequest) -> dict:
             )
 
     return {
+        "engine": req.engine,
         "scenario_id": scenario.scenario_id if scenario else None,
         "stopped_reason": result["stopped_reason"],
         "verified": bool(result["final_proof"]),
@@ -145,12 +254,12 @@ def _build_mock_executors(executor_config: dict[str, dict]) -> dict[str, MockExe
 class RunRequest(BaseModel):
     source_code: str
     protocol_name: str
-    target_contracts: dict[str, str]
+    target_contracts: dict[str, str] = Field(min_length=1)
     fork_url: str = ""
-    fork_block: int = 0
-    attacker_initial_eth: float = 1.0
-    engine: str = "mock"  # "mock" | "foundry"
-    max_retries: int = 3
+    fork_block: int = Field(default=0, ge=0)
+    attacker_initial_eth: float = Field(default=1.0, ge=0, allow_inf_nan=False)
+    engine: Literal["mock", "foundry"] = "mock"
+    max_retries: int = Field(default=3, ge=0)
     # None means heuristics only; the server-side Anthropic key comes from its environment.
     llm: Literal["anthropic", "echo"] | None = None
 
@@ -158,11 +267,11 @@ class RunRequest(BaseModel):
 class BenchmarkRequest(BaseModel):
     source_code: str
     protocol_name: str
-    target_contracts: dict[str, str]
+    target_contracts: dict[str, str] = Field(min_length=1)
     executor_config: dict[str, dict] = Field(default_factory=dict)
-    attacker_initial_eth: float = 1.0
+    attacker_initial_eth: float = Field(default=1.0, ge=0, allow_inf_nan=False)
     fork_url: str = ""
-    fork_block: int = 0
+    fork_block: int = Field(default=0, ge=0)
 
 
 class SentinelRequest(BaseModel):
@@ -171,12 +280,12 @@ class SentinelRequest(BaseModel):
     request_id: str
     target_protocol: str
     source_code: str
-    target_contracts: dict[str, str]
+    target_contracts: dict[str, str] = Field(min_length=1)
     suspected_vulnerability_class: str | None = None
     executor_config: dict[str, dict] = Field(default_factory=dict)
-    attacker_initial_eth: float = 1.0
+    attacker_initial_eth: float = Field(default=1.0, ge=0, allow_inf_nan=False)
     fork_url: str = ""
-    fork_block: int = 0
+    fork_block: int = Field(default=0, ge=0)
 
 
 @app.get("/attack-library")
@@ -195,7 +304,7 @@ async def list_attack_library():
 async def get_attack_library_entries(vulnerability_class: str):
     with run_store(db_path=_configured_db_path()) as active_store:
         rows = active_store.library_entries(vulnerability_class)
-        return [dict(row) for row in rows]
+        return _redact_evidence([dict(row) for row in rows])
 
 
 @app.post("/runs", status_code=202, dependencies=[Depends(require_bearer_token)])
@@ -207,23 +316,25 @@ async def create_run(req: RunRequest):
 @app.get("/jobs/{job_id}", dependencies=[Depends(require_bearer_token)])
 async def get_job(job_id: str):
     with _jobs_lock:
-        future = _jobs.get(job_id)
-    if future is None:
+        _cleanup_jobs()
+        job = _jobs.get(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="Unknown job id.")
 
+    future = job.future
     if not future.done():
         return {"job_id": job_id, "status": "running" if future.running() else "queued"}
     try:
-        return {"job_id": job_id, "status": "complete", "result": future.result()}
-    except Exception as exc:  # noqa: BLE001 — report worker failures through the job result
-        return {"job_id": job_id, "status": "failed", "error": str(exc)}
+        return {"job_id": job_id, "status": "complete", "result": _redact_evidence(future.result())}
+    except Exception:  # noqa: BLE001 — exception messages may contain credentials
+        return {"job_id": job_id, "status": "failed", "error": "Job execution failed."}
 
 
-@app.get("/runs/{scenario_id}")
+@app.get("/runs/{scenario_id}", dependencies=[Depends(require_bearer_token)])
 async def get_run(scenario_id: str):
     with run_store(db_path=_configured_db_path()) as active_store:
         rows = active_store.attempts_for_scenario(scenario_id)
-        return [dict(row) for row in rows]
+        return _redact_evidence([dict(row) for row in rows])
 
 
 def _execute_benchmark(req: BenchmarkRequest) -> dict:
