@@ -7,12 +7,9 @@ description: >
   mutually exclusive, or (pre-0.8.0 / unchecked blocks) silent
   overflow/underflow.
 
-default_invariants:
-  - "protocol.sum_of_internal_balances == protocol.actual_token_balance"
+default_invariants: []
 
-default_success_conditions:
-  - expression: "attacker.extracted_value > attacker.deposited_value"
-    description: "Attacker extracted more value than they deposited due to an accounting drift, not a price move"
+default_success_conditions: []
 
 heuristic_source_patterns:
   - pattern: 'unchecked {'
