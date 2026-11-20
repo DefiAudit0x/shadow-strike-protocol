@@ -863,7 +863,9 @@ class MockExecutor:
                 "eth_balance_before": before.get(alias, 0.0),
                 "eth_balance_after": after.get(alias, 0.0),
             }
-        # convenience alias for the verifier's "legitimate_entitlement"
+        # Starting-capital baseline used by the reentrancy condition, which
+        # compares gross ending balance against entitlement (not net gain
+        # against the same starting balance).
         if "attacker" in state_vars:
             state_vars["attacker"]["legitimate_entitlement"] = scenario.attacker.initial_eth
 
