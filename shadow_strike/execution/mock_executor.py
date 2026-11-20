@@ -265,7 +265,7 @@ class AccessControlTarget:
 
 
 class SimplePool:
-    """Constant-product AMM pool (x*y=k) — price is reserve_b / reserve_a.
+    """Constant-product AMM pool (x*y=k) — price of B in A is reserve_a / reserve_b.
     A single large swap moves the spot price a lot in one block, which is
     exactly the manipulation surface oracle_manipulation targets."""
 
