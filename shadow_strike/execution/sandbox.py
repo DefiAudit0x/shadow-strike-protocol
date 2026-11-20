@@ -1,21 +1,9 @@
 """
 shadow_strike.execution.sandbox
 ==================================
-Two layers of isolation, matching architecture §2.6:
-
-1. SandboxedSubprocess — process-level resource limits (CPU time, memory,
-   max file size, no core dumps) applied via Python's stdlib `resource`
-   module in the child's `preexec_fn`. This works on any POSIX system,
-   RIGHT NOW, with zero extra dependencies — and is demonstrated below
-   actually killing a runaway process.
-
-2. The bundled Dockerfile (docker/sandbox.Dockerfile) — full container
-   isolation (no outbound network except one allow-listed RPC host,
-   read-only filesystem except /tmp scratch, non-root user, dropped
-   capabilities). Layer 1 alone is NOT sufficient for untrusted
-   Solidity/LLM-influenced code in production — it bounds resource
-   *consumption*, not filesystem or network access. Both layers are
-   meant to be used together; see ForgeRunner's docstring.
+SandboxedSubprocess applies POSIX resource limits to host subprocesses.
+These limits do not isolate filesystem or network access. The bundled
+Docker container is manual-only and does not enforce an egress allowlist.
 """
 
 from __future__ import annotations
@@ -33,7 +21,8 @@ class SandboxLimitExceeded(RuntimeError):
 @dataclass
 class SandboxLimits:
     cpu_seconds: int = 20
-    memory_bytes: int = 512 * 1024 * 1024    # 512 MB
+    # RLIMIT_AS: 1536 MiB verified with an offline forge test (Forge 1.9.0, solc 0.8.19).
+    memory_bytes: int = 1536 * 1024 * 1024
     max_file_size_bytes: int = 50 * 1024 * 1024  # 50 MB — generated .t.sol / build artifacts
     wall_clock_seconds: int = 30              # backstop in case a process ignores SIGXCPU
 
