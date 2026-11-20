@@ -65,6 +65,32 @@ contracts/
 └── test/                       # Foundry tests (يدوي + مولَّد تلقائياً)
 ```
 
+## API security and jobs
+
+The optional FastAPI service is intended to be bound to a trusted local or
+private network. Configure a secret before starting it; all `POST` routes
+(`/runs`, `/benchmark`, and `/sentinel/hypothesis`) require the header
+`Authorization: Bearer <token>` and return `202 Accepted` with a `job_id`.
+Poll `GET /jobs/{job_id}` with the same bearer token to read `queued`,
+`running`, `complete`, or `failed` status. Jobs run in a bounded in-process
+worker pool, so their status is available only to the current API process.
+
+```bash
+export SHADOW_STRIKE_API_TOKEN="replace-with-a-long-random-secret"
+# Optional; defaults to ./shadow_strike_knowledge.sqlite3 and is opened lazily.
+export SHADOW_STRIKE_DB_PATH="$PWD/shadow_strike_knowledge.sqlite3"
+uvicorn shadow_strike.api.main:app --host 127.0.0.1
+```
+
+The dashboard prompts for the bearer token and sends it with run and job-poll
+requests. Use HTTPS if the dashboard or API is accessed beyond localhost, and
+do not embed the server token in a publicly served dashboard. The API rejects
+every non-empty `fork_url`; API-triggered Foundry runs therefore cannot select
+an RPC endpoint, while local CLI runs remain available for forked scenarios.
+The placeholder streaming WebSocket was removed; job polling is the supported
+progress interface. Importing `shadow_strike.api.main` does not create the
+SQLite database; the configured store is opened only when persistence is used.
+
 ## ما اكتمل منذ النسخة الأولى
 
 | العنصر | الحالة |
