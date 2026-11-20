@@ -8,7 +8,7 @@ Deterministic verdict layer. No LLM call happens anywhere in this file
 from __future__ import annotations
 
 from shadow_strike.core.models import AttackScenario, ExecutionResult, VerificationResult
-from shadow_strike.core.safe_eval import UnsafeExpressionError, safe_eval
+from shadow_strike.core.safe_eval import safe_eval
 
 
 class Verifier:
@@ -18,10 +18,7 @@ class Verifier:
             try:
                 passed = bool(safe_eval(cond.expression, execution_result.state_vars))
                 error = None
-            except UnsafeExpressionError as e:
-                # A condition that fails safety review NEVER silently
-                # counts as passed — it's recorded as a hard failure of
-                # that condition, visible in the proof artifact.
+            except Exception as e:  # noqa: BLE001 - Record any evaluation failure on this condition.
                 passed = False
                 error = str(e)
             condition_results.append({
@@ -35,8 +32,7 @@ class Verifier:
         for inv in scenario.invariants_under_test:
             try:
                 holds = bool(safe_eval(inv, execution_result.state_vars))
-            except UnsafeExpressionError as e:
-                holds = False
+            except Exception as e:  # noqa: BLE001 - Invariant evaluation is informational.
                 invariant_violations.append(f"{inv}  (unevaluable: {e})")
                 continue
             if not holds:
@@ -51,7 +47,7 @@ class Verifier:
         # A missing post-state cannot establish resistance (e.g. forge build failure).
         if not execution_result.state_vars:
             verdict = "error" if execution_result.reverted else "inconclusive"
-        elif any(c["error"] for c in condition_results):
+        elif any(c["error"] is not None for c in condition_results):
             verdict = "error"
         elif not condition_results:
             verdict = "inconclusive"
