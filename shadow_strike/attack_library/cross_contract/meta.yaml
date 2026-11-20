@@ -15,8 +15,12 @@ default_invariants: []
 default_success_conditions: []
 
 heuristic_source_patterns:
-  - pattern: 'IExternal'
-    note: "generic interface naming is a weak signal only — flag any external call whose target is itself attacker-upgradable or attacker-deployable"
+  - pattern: '.staticcall('
+    note: "external state read — review trust in the target and returned data"
+  - pattern: '.delegatecall('
+    note: "delegated execution — review who controls the implementation"
+  - pattern: 'onERC721Received('
+    note: "receiver callback — review cross-contract state assumptions"
 
 # roadmap — this class is defined by the RELATIONSHIP between specific
 # contracts in a specific deployment; see architecture doc §8, "attacks
