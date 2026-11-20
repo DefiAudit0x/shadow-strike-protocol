@@ -74,7 +74,9 @@ class SimpleShadowStrikeGraph:
 
             if state["current_scenario"] is None:
                 state["final_proof"] = None
-                state["stopped_reason"] = state.get("planner_error", "no scenario produced")
+                state["stopped_reason"] = state.get("stopped_reason") or state.get(
+                    "planner_error", "no scenario produced"
+                )
                 return state
 
             state = executor_node(state, self.executor)
