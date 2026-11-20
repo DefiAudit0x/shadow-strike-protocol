@@ -177,10 +177,9 @@ class ExecutionResult:
     scenario_id: str
     reverted: bool
     revert_reason: str | None
-    state_vars: dict[str, Any]           # flattened variables available to success_conditions
+    state_vars: dict[str, Any]           # nested condition context; ETH balances (see execution/STATE_PROTOCOL.md)
     state_diff: dict[str, Any]
     call_trace: list[dict]
-    gas_used: int
     raw_logs: list[str] = field(default_factory=list)
     engine: str = "unknown"              # "foundry" | "mock" — always stamped, never silent
 

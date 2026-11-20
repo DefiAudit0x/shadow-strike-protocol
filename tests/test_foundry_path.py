@@ -43,9 +43,14 @@ with Path("forge-invocations.jsonl").open("a") as log:
     log.write(json.dumps({"path": str(path), "contract": contract}) + "\\n")
 print(json.dumps({str(path): {"test_results": {"test_scenario()": {
     "success": True,
-    "decoded_logs": ["attacker_eth_before: 1", "attacker_eth_after: 11",
-                     "vault_eth_before: 10", "vault_eth_after: 0",
-                     "vault_slots_written: 1", "vault_written_slot: 0x01"]
+    "decoded_logs": ["attacker_eth_before: 1000000000000000000", "attacker_eth_after: 11000000000000000000",
+                     "vault_eth_before: 10000000000000000000", "vault_eth_after: 0",
+                     "vault_slots_written: 1", "vault_written_slot: 0x01",
+                     "ss.attacker.address: 0x2222222222222222222222222222222222222222",
+                     "ss.vault.owner: 0x2222222222222222222222222222222222222222",
+                     "ss.vault.last_caller: 0x2222222222222222222222222222222222222222",
+                     "ss.vault.replay_count: 2", "ss.vault.victim_shares: 0",
+                     "ss.attacker.legitimate_entitlement: 1000000000000000000"]
 }}}}))
 '''
 
@@ -84,6 +89,11 @@ class TestFoundryProductionPath(unittest.TestCase):
         self.assertEqual(result.state_vars["attacker"]["eth_balance_after"], 11)
         self.assertEqual(result.state_diff["vault"]["written_slots"], ["0x01"])
         self.assertTrue(result.raw_logs)
+        self.assertEqual(result.state_vars["vault"]["owner"], "attacker")
+        self.assertEqual(result.state_vars["vault"]["last_caller"], "attacker")
+        self.assertEqual(result.state_vars["vault"]["replay_count"], 2)
+        self.assertEqual(result.state_vars["vault"]["victim_shares"], 0)
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 1)
         self.assertIsNotNone(state["verifier_verdict"])
         self.assertEqual(len(self.assert_forge_ran()), 1)
 
@@ -119,9 +129,8 @@ class TestFoundryProductionPath(unittest.TestCase):
              "--foundry-root", str(self.root), "--db", str(self.root / "cli.sqlite3"), "--max-retries", "0"],
             cwd=ROOT, capture_output=True, text=True, check=False,
         )
-        # An unverified condition is a normal completed CLI run (exit 1).
-        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-        self.assertIn("ATTACK NOT VERIFIED:", proc.stdout)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("ATTACK VERIFIED", proc.stdout)
         self.assertIn("[verifier]", proc.stderr)
         calls = self.assert_forge_ran()
         scenario_id = calls[0]["contract"].removeprefix("ShadowStrike_")

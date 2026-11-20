@@ -15,6 +15,15 @@ contract ShadowStrike_{{ scenario_id }} is Test {
     {{ decl }}
 {% endfor %}
 
+    // Optional public getters: absent/reverting getters remain unknown, never zero-filled.
+    function _emitState(address target, string memory key, string memory getter, bool isAddress) internal {
+        (bool ok, bytes memory data) = target.staticcall(abi.encodeWithSignature(getter));
+        if (ok && data.length == 32) {
+            if (isAddress) emit log_named_address(key, abi.decode(data, (address)));
+            else emit log_named_uint(key, abi.decode(data, (uint256)));
+        }
+    }
+
     function setUp() public {
 {% if fork_url %}
         vm.createSelectFork({{ fork_url }}, {{ fork_block }});

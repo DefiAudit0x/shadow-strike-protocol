@@ -799,7 +799,6 @@ class MockExecutor:
             state_vars=state_vars,
             state_diff={"before": before, "after": after},
             call_trace=world.call_trace,
-            gas_used=21000 * len(scenario.steps),  # cosmetic placeholder only
             engine="mock",
         )
 
