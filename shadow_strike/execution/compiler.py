@@ -164,9 +164,14 @@ class ScenarioCompiler:
             )
             setup_lines.append(f"vm.deal(address(attacker), {scenario.attacker.initial_eth} ether);")
 
+        if not attacker_contract_name:
+            contract_decls.append("address attacker;")
+            setup_lines.extend(['attacker = makeAddr("attacker");',
+                                f"vm.deal(attacker, {scenario.attacker.initial_eth} ether);"])
+
         before_snapshot_lines = [
             "uint256 _attackerEthBefore = address(attacker).balance;" if attacker_contract_name
-            else "uint256 _attackerEthBefore = 0;",
+            else "uint256 _attackerEthBefore = attacker.balance;",
         ]
         for alias in scenario.initial_state.target_contracts:
             before_snapshot_lines.append(
@@ -196,7 +201,7 @@ class ScenarioCompiler:
 
         after_snapshot_lines = [
             "uint256 _attackerEthAfter = address(attacker).balance;" if attacker_contract_name
-            else "uint256 _attackerEthAfter = 0;",
+            else "uint256 _attackerEthAfter = attacker.balance;",
         ]
         for alias in scenario.initial_state.target_contracts:
             after_snapshot_lines.append(
@@ -207,7 +212,23 @@ class ScenarioCompiler:
             'emit log_named_uint("attacker_eth_before", _attackerEthBefore);',
             'emit log_named_uint("attacker_eth_after", _attackerEthAfter);',
         ]
+        emit_lines.extend([
+            'emit log_named_address("ss.attacker.address", address(attacker));',
+            f'emit log_named_uint("ss.attacker.legitimate_entitlement", {scenario.attacker.initial_eth} ether);',
+        ])
         for alias in scenario.initial_state.target_contracts:
+            for field, getters in {
+                "owner": ("owner()",),
+                "last_caller": ("last_caller()", "lastCaller()"),
+                "replay_count": ("replay_count()", "replayCount()"),
+                "victim_shares": ("victim_shares()", "victimShares()"),
+                "attacker_balance": ("attacker_balance()", "attackerBalance()"),
+            }.items():
+                for getter in getters:
+                    emit_lines.append(
+                        f'_emitState(address({alias}), "ss.{alias}.{field}", "{getter}", '
+                        f'{str(field in ("owner", "last_caller")).lower()});'
+                    )
             emit_lines.append(f'emit log_named_uint("{alias}_eth_before", _{alias}EthBefore);')
             emit_lines.append(f'emit log_named_uint("{alias}_eth_after", _{alias}EthAfter);')
 
