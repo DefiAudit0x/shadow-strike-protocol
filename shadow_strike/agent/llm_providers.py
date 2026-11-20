@@ -104,3 +104,20 @@ class EchoLLM:
 
     def __call__(self, prompt: str) -> str:
         return prompt.strip().splitlines()[-1] if prompt.strip() else ""
+
+
+def build_llm_fn(provider: str | None, api_key: str | None = None):
+    """Build an llm_fn from a provider name (Part 10).
+
+    None -> None (heuristics only, no LLM). "echo" -> EchoLLM test double.
+    "anthropic" -> AnthropicLLM (key from the argument or ANTHROPIC_API_KEY;
+    raises LLMProviderError when no key is available). Anything else raises
+    ValueError.
+    """
+    if provider is None:
+        return None
+    if provider == "echo":
+        return EchoLLM()
+    if provider == "anthropic":
+        return AnthropicLLM(api_key=api_key)
+    raise ValueError(f"unknown llm provider: {provider!r} (expected 'anthropic' or 'echo')")
