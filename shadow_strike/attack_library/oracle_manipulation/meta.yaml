@@ -21,5 +21,4 @@ heuristic_source_patterns:
   - pattern: 'balanceOf(address(this))'
     note: "spot balance used to infer price/share value — single-tx manipulable"
 
-attacker_template: attacker_template.sol.j2
 composes_with: [flash_loan]
