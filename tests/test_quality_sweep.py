@@ -49,6 +49,59 @@ class TestQualitySweep(unittest.TestCase):
             safe_eval('_secret', {'_secret': 7})
         self.assertEqual(safe_eval('value.balance + 2', {'value': {'balance': 3}}), 5)
 
+    def test_safe_eval_c06_never_invokes_properties_or_object_operators(self):
+        class Object:
+            calls = 0
+
+            @property
+            def balance(self):
+                self.calls += 1
+                return 1
+
+            def __bool__(self):
+                self.calls += 1
+                return True
+
+        obj = Object()
+        for expression in ('value.balance', 'not value', 'value == 1', 'value + 1'):
+            with self.subTest(expression=expression), self.assertRaises(UnsafeExpressionError):
+                safe_eval(expression, {'value': obj})
+        self.assertEqual(obj.calls, 0)
+        with self.assertRaises(UnsafeExpressionError):
+            safe_eval('value()', {'value': lambda: 1})
+
+    def test_safe_eval_c07_flat_dotted_context(self):
+        self.assertEqual(safe_eval('a.b', {'a.b': 1}), 1)
+        self.assertEqual(safe_eval('a.b.c', {'a': {'b.c': 2}}), 2)
+        self.assertEqual(safe_eval('a.b', {'a': {'b': 3}}), 3)
+        with self.assertRaises(UnsafeExpressionError):
+            safe_eval('a._b', {'a._b': 1})
+
+    def test_safe_eval_c08_short_circuit(self):
+        for expression, expected in (
+            ('True or 1/0', True), ('False and missing.value', False),
+            ('3 < 2 < missing', False), ('1 < 2 < 3', True),
+            ('False or True', True), ('True and False', False),
+        ):
+            with self.subTest(expression=expression):
+                self.assertIs(safe_eval(expression, {}), expected)
+
+    def test_safe_eval_c09_resource_limits(self):
+        expressions = (
+            "'x' * 1000000", "1000000 * 'x'", "('x' * 40000) + ('x' * 40000)",
+            '(((2 ** 12) ** 12) ** 12) ** 12',
+            '1' + ' ' * 8192, '-' * 70 + '1',
+            ' or '.join(['0'] * 1100), "'%1000000000s' % 'x'",
+        )
+        for expression in expressions:
+            with self.subTest(expression=expression[:80]), self.assertRaises(UnsafeExpressionError):
+                safe_eval(expression, {})
+        self.assertEqual(safe_eval("'x' * 10", {}), 'x' * 10)
+        self.assertEqual(safe_eval('(2 ** 12) ** 2', {}), 2 ** 24)
+        for value in ('x' * 65537, 1 << 4096):
+            with self.assertRaises(UnsafeExpressionError):
+                safe_eval('value', {'value': value})
+
     def test_loader_rejects_unknown_keys_and_preserves_reentry_setting(self):
         scenario = load_scenario_yaml(SCENARIO)
         scenario.attacker_max_reentries = 7
