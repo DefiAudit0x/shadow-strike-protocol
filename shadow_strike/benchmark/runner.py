@@ -33,10 +33,18 @@ from shadow_strike.verifier.verifier import Verifier
 @dataclass
 class ClassResult:
     vulnerability_class: str
-    status: str   # "exploitable" | "resisted" | "no_builder" | "no_executor" | "build_error"
+    status: str   # legacy display status; verdict supplies the canonical classification
     scenario_id: str | None = None
     proof_artifact: dict | None = None
     detail: str | None = None
+    verdict: str = field(init=False)
+
+    def __post_init__(self):
+        self.verdict = self._classify_verdict()
+
+    def _classify_verdict(self) -> str:
+        return {"exploitable": "verified", "resisted": "resisted",
+                "build_error": "error", "error": "error"}.get(self.status, "inconclusive")
 
 
 @dataclass
@@ -52,7 +60,9 @@ class BenchmarkReport:
             "resisted": "🟢 RESISTED",
             "no_builder": "⚪ NO BUILDER (roadmap class)",
             "no_executor": "⚪ SKIPPED (no executor configured)",
-            "build_error": "🟡 BUILD ERROR",
+            "build_error": "🟡 ERROR (planner)",
+            "error": "🟡 ERROR (harness)",
+            "inconclusive": "⚪ INCONCLUSIVE",
         }
         for r in self.results:
             lines.append(f"{icon.get(r.status, r.status):32s} {r.vulnerability_class}"
@@ -60,6 +70,9 @@ class BenchmarkReport:
         exploitable = sum(1 for r in self.results if r.status == "exploitable")
         tested = sum(1 for r in self.results if r.status in ("exploitable", "resisted"))
         lines.append("-" * 50)
+        if not tested:
+            lines.append("INCONCLUSIVE — no hypotheses were actually tested")
+            return "\n".join(lines)
         lines.append(f"{exploitable}/{tested} tested classes exploitable"
                       + (f"  ({len(self.results) - tested} not tested)" if tested < len(self.results) else ""))
         return "\n".join(lines)
@@ -111,14 +124,18 @@ def run_benchmark(
                 report.results.append(ClassResult(vuln_class, "no_executor", scenario_id=scenario.scenario_id))
                 continue
 
-            result = execute_scenario(executor, scenario)
-            verdict = verifier.verify(scenario, result)
+            try:
+                result = execute_scenario(executor, scenario)
+                verdict = verifier.verify(scenario, result)
+            except Exception as e:  # noqa: BLE001 — report harness failures as errors
+                report.results.append(ClassResult(vuln_class, "error", detail=str(e)))
+                continue
             save_run(active_store, scenario, result, verdict,
                      failure_reason=result.revert_reason or "success conditions not met")
 
             report.results.append(ClassResult(
                 vulnerability_class=vuln_class,
-                status="exploitable" if verdict.verified else "resisted",
+                status="exploitable" if verdict.verified else verdict.verdict,
                 scenario_id=scenario.scenario_id,
                 proof_artifact=verdict.proof_artifact if verdict.verified else None,
                 detail=None if verdict.verified else (result.revert_reason or "success conditions not met"),
