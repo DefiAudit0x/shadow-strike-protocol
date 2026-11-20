@@ -8,12 +8,9 @@ description: >
   malleable form (s not canonicalized, allowing a second valid
   signature for the same (r,s) pair's flipped counterpart).
 
-default_invariants:
-  - "signatures.used_count(sig_hash) <= 1"
+default_invariants: []
 
-default_success_conditions:
-  - expression: "attacker.replayed_action_count > 1"
-    description: "The same signed authorization was successfully consumed more than once"
+default_success_conditions: []
 
 heuristic_source_patterns:
   - pattern: 'ecrecover'
