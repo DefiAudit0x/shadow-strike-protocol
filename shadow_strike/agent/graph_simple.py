@@ -48,6 +48,8 @@ class SimpleShadowStrikeGraph:
             "target_protocol_name": target_protocol_name,
             "attempt_count": 0,
             "history": [],
+            # S03: one record per executed attempt (see verifier_node).
+            "attempt_records": [],
         }
 
         def emit(label):

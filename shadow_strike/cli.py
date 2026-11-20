@@ -13,7 +13,9 @@ shadow_strike.cli
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -23,7 +25,6 @@ from shadow_strike.attack_library.registry import AttackLibrary
 from shadow_strike.core.models import AttackScenario
 from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
 from shadow_strike.execution.mock_executor import MockExecutor
-from shadow_strike.storage.db import KnowledgeStore
 from shadow_strike.storage.persistence import run_store, save_run
 from shadow_strike.verifier.verifier import Verifier
 
@@ -36,6 +37,40 @@ def _parse_kv(pairs: list[str]) -> dict[str, str]:
         k, v = p.split("=", 1)
         out[k] = v
     return out
+
+
+def _parse_mock_params(pairs: list[str]) -> dict[str, dict]:
+    params = {}
+    for pair in pairs:
+        name, equals, raw = pair.partition("=")
+        alias, colon, key = name.partition(":")
+        value = raw.strip()
+        if not (equals and colon and alias and key and value) or re.search(r"[\s:]", alias + key):
+            raise ValueError(f"expected alias:key=value, got {pair!r}")
+
+        lowered = value.lower()
+        if lowered in {"true", "false"}:
+            parsed = lowered == "true"
+        elif lowered in {"null", "none"}:
+            parsed = None
+        elif value.startswith(("'", '"')):
+            try:
+                parsed = ast.literal_eval(value)
+                if not isinstance(parsed, str):
+                    raise TypeError("expected a quoted string")
+            except (SyntaxError, TypeError, ValueError) as exc:
+                raise ValueError(f"invalid quoted value {value!r} in {pair!r}") from exc
+        elif re.fullmatch(r"[+-]?[0-9]+", value):
+            try:
+                parsed = int(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid integer value {value!r} in {pair!r}") from exc
+        elif re.fullmatch(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", value):
+            parsed = float(value)
+        else:
+            parsed = raw
+        params.setdefault(alias, {})[key] = parsed
+    return params
 
 
 def cmd_run(args):
@@ -83,6 +118,7 @@ def cmd_run(args):
             save_run(
                 store, scenario, result.get("execution_result"), result.get("verifier_verdict"),
                 attempt_number=result["attempt_count"], failure_reason=result["stopped_reason"],
+                attempts=result.get("attempt_records"),
             )
 
     if result["final_proof"]:
@@ -129,16 +165,11 @@ def cmd_run_scenario(args):
                   "(scenario_loader doesn't guess which mock contract models your hand-written scenario)",
                   file=sys.stderr)
             sys.exit(2)
-        params = {}
-        if args.mock_params:
-            for p in args.mock_params:
-                alias, kv = p.split(":", 1)
-                k, v = kv.split("=", 1)
-                try:
-                    v = float(v)
-                except ValueError:
-                    pass
-                params.setdefault(alias, {})[k] = v
+        try:
+            params = _parse_mock_params(args.mock_params or [])
+        except ValueError as e:
+            print(f"MOCK PARAM ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
         executor = MockExecutor(contract_kinds=kinds, contract_params=params)
 
     result = executor.execute(scenario) if hasattr(executor, "execute") else executor.run(scenario, test_path)
@@ -154,9 +185,7 @@ def cmd_run_scenario(args):
 def cmd_save_scenario(args):
     """Round-trip a stored scenario back out to an editable YAML file."""
     with run_store(db_path=args.db) as store:
-        scenario_row = store.conn.execute(
-            "SELECT scenario_json FROM scenarios WHERE id = ?", (args.scenario_id,)
-        ).fetchone()
+        scenario_row = store.get_scenario(args.scenario_id)
         if scenario_row is None:
             print(f"ERROR: scenario not found: {args.scenario_id}", file=sys.stderr)
             sys.exit(1)
@@ -173,10 +202,9 @@ def cmd_library(args):
 
 
 def cmd_history(args):
-    store = KnowledgeStore(db_path=args.db)
-    rows = store.attempts_for_scenario(args.scenario_id)
-    for row in rows:
-        print(dict(row))
+    with run_store(db_path=args.db) as store:
+        for row in store.attempts_for_scenario(args.scenario_id):
+            print(dict(row))
 
 
 def main():

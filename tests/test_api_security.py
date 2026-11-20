@@ -19,6 +19,19 @@ ROOT = Path(__file__).resolve().parents[1]
 HAS_API_TEST_DEPS = bool(importlib.util.find_spec("fastapi") and importlib.util.find_spec("httpx"))
 
 
+def _legacy_scenario():
+    """Minimal scenario stand-in for seeding legacy rows: since S01
+    enforces foreign keys, attempts need their scenario row first."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        scenario_id="legacy",
+        target_protocol="Vault",
+        vulnerability_class=SimpleNamespace(value="reentrancy"),
+        to_json=lambda **kwargs: json.dumps({"scenario_id": "legacy"}, **kwargs),
+    )
+
+
 @unittest.skipUnless(HAS_API_TEST_DEPS, "API regression requires optional fastapi and httpx dependencies")
 class TestAPISecurity(unittest.TestCase):
     def setUp(self):
@@ -113,6 +126,7 @@ class TestAPISecurity(unittest.TestCase):
             db_path = str(Path(directory) / "legacy.sqlite3")
             with patch.dict(os.environ, {self.api.DB_PATH_ENV: db_path}):
                 store = KnowledgeStore(db_path)
+                store.save_scenario(_legacy_scenario())
                 store.save_attempt("legacy", 1, "failure", evidence["log"], evidence, evidence)
                 store.add_library_entry("reentrancy", evidence)
                 store.close()
@@ -186,6 +200,7 @@ class TestAPISecurity(unittest.TestCase):
             db_path = str(Path(directory) / "legacy.sqlite3")
             with patch.dict(os.environ, {self.api.DB_PATH_ENV: db_path}):
                 store = KnowledgeStore(db_path)
+                store.save_scenario(_legacy_scenario())
                 store.save_attempt("legacy", 1, "failure", evidence["log"], evidence, evidence)
                 store.close()
                 response = self.request("GET", "/runs/legacy", headers=self.auth())

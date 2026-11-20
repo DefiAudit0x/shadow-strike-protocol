@@ -47,6 +47,10 @@ class ShadowStrikeState(TypedDict, total=False):
     verdict: str | None
     attempt_count: int
     history: list[dict]
+    # S03: one record per executed attempt (verifier_node appends).
+    # Declared here (Fix 8c rule): a node-written key must be a declared
+    # state channel or real LangGraph silently drops it.
+    attempt_records: list[dict]
     final_proof: dict | None
     planner_error: str | None
     planner_detail: str | None

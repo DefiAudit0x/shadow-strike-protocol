@@ -421,6 +421,15 @@ def verifier_node(state: dict, verifier: Verifier | None = None) -> dict:
     verdict = verifier.verify(scenario, execution_result)
     state["verifier_verdict"] = verdict
     state["verdict"] = verdict.verdict
+    # S03: keep one record per executed attempt (the planner builds a fresh
+    # scenario per retry, so each record carries its own scenario). Callers
+    # persist these via save_run instead of only the final attempt.
+    state["attempt_records"] = state.get("attempt_records", []) + [{
+        "attempt_number": state.get("attempt_count", 0),
+        "scenario": scenario,
+        "execution_result": execution_result,
+        "verdict": verdict,
+    }]
     return state
 
 
