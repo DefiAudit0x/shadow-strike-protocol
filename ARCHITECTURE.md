@@ -278,6 +278,22 @@ forge test --match-contract ShadowStrike_Scenario_0014 \
 
 ### 2.4 Verifier / Proof Engine
 
+Verdicts are `verified` (executed success conditions hold), `resisted`
+(executed conditions fail or the attack reverts with observed state), `error`
+(planner/harness failure or unevaluable conditions), and `inconclusive`
+(no executable/configured hypothesis, no conditions, or no observed state).
+A failed Foundry run without post-state is an error, never resistance.
+Benchmark/adapter legacy status labels `exploitable`, `build_error`,
+`no_builder`, and `no_executor` map to these via their explicit `verdict`.
+Zero tested hypotheses produces an inconclusive scorecard without a ratio.
+
+Invariants are **informational**: violating one does not fail verification.
+They describe protocol properties an exploit may intentionally break; only
+success conditions determine exploit success on an observed execution.
+Proof artifacts record `invariants_policy: informational`; finding reports
+label invariant checks informational. The code below is illustrative.
+
+
 هذا هو "القاضي" الحتمي — كود عادي، بدون LLM.
 
 ```python
