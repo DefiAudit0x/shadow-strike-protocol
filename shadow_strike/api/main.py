@@ -22,6 +22,7 @@ from typing import Literal
 
 try:
     from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from fastapi.encoders import jsonable_encoder
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
@@ -63,9 +64,14 @@ def _sanitize_for_json(value):
 
 @app.exception_handler(RequestValidationError)
 async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    # Same shape as FastAPI's default handler ({"detail": errors}, 422),
-    # with non-finite floats sanitized so the response itself serializes.
-    return JSONResponse(status_code=422, content={"detail": _sanitize_for_json(exc.errors())})
+    # Same shape as FastAPI's default handler ({"detail": errors}, 422).
+    # jsonable_encoder first, as the default handler does: it converts
+    # non-JSON-native values in the error detail — e.g. the raw body bytes
+    # of a text/plain request — to strings. _sanitize_for_json then
+    # replaces non-finite floats (NaN/Infinity) that the encoder leaves
+    # as-is, so the response itself always serializes.
+    encoded = jsonable_encoder(exc.errors())
+    return JSONResponse(status_code=422, content={"detail": _sanitize_for_json(encoded)})
 
 
 library = AttackLibrary()

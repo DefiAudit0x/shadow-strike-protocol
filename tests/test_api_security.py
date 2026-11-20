@@ -143,7 +143,10 @@ class TestAPISecurity(unittest.TestCase):
         from shadow_strike.storage.db import KnowledgeStore
 
         evidence = {
-            "rpc_credentials": "https://user:rpc-pass@rpc.example/x",
+            # Opaque non-URL values on purpose: a URL value would be
+            # redacted by the regex alone, so it would not prove the
+            # plural suffix is what redacts the key.
+            "rpc_credentials": "opaque-rpc-credential",
             "rpc_tokens": "tok-secret",
             "api_secrets": "api-secret",
             "safe": "kept",
@@ -164,7 +167,7 @@ class TestAPISecurity(unittest.TestCase):
                 self.assertEqual(sanitized["rpc_tokens"], "[REDACTED]")
                 self.assertEqual(sanitized["api_secrets"], "[REDACTED]")
                 self.assertEqual(sanitized["safe"], "kept")
-                for secret in ("rpc-pass", "tok-secret", "api-secret"):
+                for secret in ("opaque-rpc-credential", "tok-secret", "api-secret"):
                     self.assertNotIn(secret, response.text)
 
     def test_json_encoded_string_evidence_is_sanitized(self):
@@ -311,6 +314,30 @@ class TestAPISecurity(unittest.TestCase):
                 response = self.request("POST", route, headers=self.auth(), json=payload)
                 self.assertEqual(response.status_code, 202, response.text)
                 queue.assert_called_once()
+
+    def test_text_plain_body_returns_422(self):
+        """Fix 9c (CodeRabbit Minor on PR #31): with Content-Type:
+        text/plain the validation error carries the raw body bytes; the
+        handler must convert them before sanitizing, or the 422 response
+        itself fails to serialize and the client gets a 500."""
+        import httpx
+
+        async def send(route):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self.api.app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                return await client.post(
+                    route,
+                    headers={**self.auth(), "Content-Type": "text/plain"},
+                    content=b"{}",
+                )
+
+        for route in ("/runs", "/benchmark", "/sentinel/hypothesis"):
+            with self.subTest(route=route), patch.object(self.api, "_queue_job") as queue:
+                response = asyncio.run(send(route))
+                self.assertEqual(response.status_code, 422, response.text)
+                queue.assert_not_called()
 
     def test_nonfinite_floats_return_422_not_500(self):
         """Fix 9b (CodeRabbit Minor on PR #31): NaN/Infinity in
