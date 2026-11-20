@@ -22,6 +22,4 @@ default_success_conditions:
 heuristic_source_patterns:
   - pattern: 'tx.origin'
     note: "tx.origin used for auth — classic phishing-via-contract vector"
-  - pattern: 'onlyOwner'
-    note: "modifier present — verify it is actually applied to every sensitive function, not just named ones"
 
