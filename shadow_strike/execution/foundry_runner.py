@@ -5,10 +5,8 @@ Production executor: shells out to `forge test` against a generated
 .t.sol file, inside a resource-bounded subprocess, and parses the JSON
 output into an ExecutionResult.
 
-Requires Foundry (https://getfoundry.sh) installed and a real RPC URL
-in the scenario's initial_state.fork_url. Not runnable inside a
-network-isolated sandbox — see mock_executor.py for an offline
-stand-in used for development/demo/CI without external calls.
+Requires Foundry (https://getfoundry.sh) installed on the host and an
+RPC URL for forked runs. The Docker container is manual-only.
 """
 
 from __future__ import annotations
@@ -37,12 +35,7 @@ class ForgeRunner:
                  sandbox_limits: SandboxLimits | None = None):
         self.root = Path(foundry_project_root)
         self.timeout_seconds = timeout_seconds
-        # process-level resource bound — see sandbox.py. This is layer 1
-        # of 2; layer 2 (container/network isolation) must be provided by
-        # whatever invokes ForgeRunner (see docker/sandbox.Dockerfile).
-        # Both matter: this layer stops a runaway/OOM process; it does
-        # NOT stop a malicious process from reading the filesystem or
-        # reaching the network, which only the container boundary does.
+        # These host resource limits do not restrict filesystem or network access.
         self.sandbox = SandboxedSubprocess(sandbox_limits or SandboxLimits(
             cpu_seconds=timeout_seconds, wall_clock_seconds=timeout_seconds + 10,
         ))

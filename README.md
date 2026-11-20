@@ -72,7 +72,7 @@ contracts/
 | 11/11 نوع ثغرة في مكتبة الهجمات | مسجَّلة كبيانات وصفية في `meta.yaml`؛ السيناريوهات الآلية تحتاج builder مسجَّلاً ودعم executor. لا تُولَّد عقود المهاجم من المكتبة؛ يمرَّر عقد Solidity مكتوب يدوياً إلى compiler عند الحاجة |
 | `oracle_manipulation` حي | `SimplePool` + `OracleFedLendingMarket` + `OracleManipulationAttacker` في `mock_executor.py` — هجوم تلاعب بالسعر فعلي ومُختبَر (pool رقيق يُستغل، pool عميق يصمد) |
 | `access_control` حي | `AccessControlTarget` — حارس مكسور يُستغل، حارس مُفعَّل يصدّ الهجوم |
-| Sandboxing حقيقي | `execution/sandbox.py` — حدود CPU/ذاكرة عبر `resource.setrlimit`، مُختبَرة حياً (عملية runaway تُقتل فعلياً)؛ + `docker/sandbox.Dockerfile` للعزل الكامل بالحاويات |
+| حدود موارد Forge | `execution/sandbox.py` يفرض حدود CPU والذاكرة على المضيف عبر `resource.setrlimit`؛ حاوية Docker للاستخدام اليدوي فقط |
 | `state_diff` حقيقي | `compiler.py` يُولّد `vm.record()`/`vm.accesses()` (cheatcodes حقيقية من forge-std)، `foundry_runner.py` يفكّك الناتج |
 | ربط LLM حقيقي | `agent/llm_providers.py` — `AnthropicLLM` (stdlib فقط، بلا SDK) جاهز لمفتاح API حقيقي؛ `EchoLLM` للاختبار بدون شبكة (مُختبَر حياً) |
 | ربط DeFiAudit | `reporting/report_generator.py` — يحوّل أي proof إلى Markdown finding بصيغة تدقيق احترافية (مُختبَر حياً، انظر المثال في `examples/run_demo.py` الخطوة 10) |
@@ -138,10 +138,15 @@ shadow-strike run-scenario --file my_scenario.yaml --engine mock \
 | هنا الآن (zero-dep) | الإنتاج |
 |---|---|
 | `dataclasses` في `core/models.py` | Pydantic v2 (JSON schema export) |
-| `MockExecutor` | `ForgeRunner` (حقيقي، يتطلب Foundry + RPC + sandboxing) |
+| `MockExecutor` | `ForgeRunner` (يتطلب Foundry وRPC عند استخدام fork) |
 | `SimpleShadowStrikeGraph` | `graph_langgraph.py` (checkpointing, streaming) |
 | SQLite | Postgres (نفس الـ schema بالضبط) |
 | hypothesis/critic قائمين على heuristics | ربط `llm_fn` بأي عميل LLM حقيقي |
+
+The host subprocess is the only supported `ForgeRunner` execution path.
+Resource limits do not isolate filesystem or network access. The Docker
+container is manual-only, and its [RPC egress allowlist](docker/egress-allowlist-README.md)
+is aspirational and unenforced.
 
 ```bash
 # لتشغيل ضد Foundry حقيقي بمجرد توفره:
