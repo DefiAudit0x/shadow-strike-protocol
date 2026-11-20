@@ -200,6 +200,7 @@ class VerificationResult:
     condition_results: list[dict]
     invariant_violations: list[str]
     proof_artifact: dict
+    verdict: str = "inconclusive"
 
     def to_dict(self) -> dict:
         return asdict(self)
