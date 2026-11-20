@@ -124,6 +124,29 @@ class TestAttackLibrary(unittest.TestCase):
             lib.get("not_a_real_class")
 
 
+class TestCompilerValidation(unittest.TestCase):
+    def test_invalid_fork_urls_rejected(self):
+        for url in ('https://example/\nattack', 'https://example/\rattack',
+                    'https://example/"attack', "https://example/'attack",
+                    "ftp://example/rpc", "https:///rpc", "https://example:bad/rpc",
+                    "https://[bad/rpc", "https://example/\\attack"):
+            with self.subTest(url=url), self.assertRaises(ShadowStrikeValidationError):
+                scenario = _make_scenario()
+                scenario.initial_state.fork_url = url
+                ScenarioCompiler().compile(scenario)
+
+    def test_raw_code_fields_are_rejected(self):
+        for field, payload in (("scenario_id", "x\ncontract Injected {}"),
+                               ("caller", "address(0)); revert(); //"),
+                               ("function", "deposit; revert()"),
+                               ("target", "vault; revert()")):
+            with self.subTest(field=field), self.assertRaises(ShadowStrikeValidationError):
+                scenario = _make_scenario()
+                scenario.initial_state.target_contracts = {"vault": "0x" + "1" * 40}
+                setattr(scenario if field == "scenario_id" else scenario.steps[0], field, payload)
+                ScenarioCompiler().compile(scenario)
+
+
 class TestCompiler(unittest.TestCase):
     def setUp(self):
         forge = shutil.which("forge") or str(Path.home() / ".foundry/bin/forge")
@@ -178,6 +201,47 @@ class TestCompiler(unittest.TestCase):
                 self.assertIn(s.scenario_id, source)
                 self.assertEqual("vm.createSelectFork" in source, bool(fork_url))
                 self.assert_forge_builds(test_path)
+
+    def test_injection_payloads_are_data_and_generated_file_compiles(self):
+        malicious_url = 'https://example/rpc"); revert("URL_INJECTED"); //'
+        scenario = _make_scenario(
+            hypothesis="hypothesis\r\n*/ revert(\"HYPOTHESIS_INJECTED\"); /*",
+            initial_state=InitialState(
+                fork_url=malicious_url, fork_block=1,
+                target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+            ),
+            steps=[TransactionStep(
+                step_id=1, caller="0x2222222222222222222222222222222222222222",
+                target="vault", function="submit(string)",
+                args=['sig-1', '"); revert("ARG_INJECTED"); //\\\n\r\t雪'],
+                comment='comment\r\n*/ revert("COMMENT_INJECTED"); /*\u2028tail',
+            )],
+        )
+        scenario.steps[0].function = "submit(string,string)"
+        interface = self.root / "contracts/src/interfaces/IStringSink.sol"
+        interface.write_text(
+            "pragma solidity ^0.8.19; interface IStringSink { "
+            "function submit(string calldata, string calldata) external; }"
+        )
+        compiler = ScenarioCompiler(target_types={"vault": "IStringSink"})
+        output = self.root / "contracts/test/generated"
+        with self.assertRaises(ShadowStrikeValidationError):
+            compiler.compile_to_file(scenario, output)
+        self.assertFalse(output.exists(), "Invalid URLs must not produce a file")
+        # Reject the hostile URL, then build the same hostile prose/arguments
+        # with a valid URL. forge build compiles only; it never contacts this URL.
+        scenario.initial_state.fork_url = "https://example.invalid/rpc?key=value&other=1"
+        path = compiler.compile_to_file(scenario, output)
+        source = path.read_text()
+        self.assertIn('vault.submit("sig-1", "\\x22); revert(\\x22ARG_INJECTED', source)
+        self.assertNotIn('revert("ARG_INJECTED")', source)
+        self.assertNotIn("URL_INJECTED", source)
+        self.assertNotIn("*/", source)
+        self.assertNotIn("/*", source)
+        for line in source.splitlines():
+            if "COMMENT_INJECTED" in line or "HYPOTHESIS_INJECTED" in line:
+                self.assertTrue(line.lstrip().startswith("//"), line)
+        self.assert_forge_builds(path)
 
     def test_cmd_run_scenario_attack_compiles_before_execution(self):
         from shadow_strike.cli import cmd_run_scenario
