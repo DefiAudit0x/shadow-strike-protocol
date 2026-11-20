@@ -48,7 +48,20 @@ class Verifier:
             and len(condition_results) > 0
         )
 
+        # A missing post-state cannot establish resistance (e.g. forge build failure).
+        if not execution_result.state_vars:
+            verdict = "error" if execution_result.reverted else "inconclusive"
+        elif any(c["error"] for c in condition_results):
+            verdict = "error"
+        elif not condition_results:
+            verdict = "inconclusive"
+        else:
+            verdict = "verified" if verified else "resisted"
+        verified = verdict == "verified"
+
         proof_artifact = {
+            "verdict": verdict,
+            "invariants_policy": "informational",
             "scenario": scenario.to_dict(),
             "engine": execution_result.engine,
             "reverted": execution_result.reverted,
@@ -63,6 +76,7 @@ class Verifier:
         return VerificationResult(
             scenario_id=scenario.scenario_id,
             verified=verified,
+            verdict=verdict,
             condition_results=condition_results,
             invariant_violations=invariant_violations,
             proof_artifact=proof_artifact,
