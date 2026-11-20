@@ -176,6 +176,66 @@ class TestReentrancyProfitThreshold(unittest.TestCase):
                 self.assertEqual(result.verdict, "verified" if expected else "resisted")
 
 
+class TestEntitlementFollowsEffectiveFunding(unittest.TestCase):
+    """CodeRabbit follow-up on PR #29 (Fix 7b): the reentrancy entitlement
+    must follow the attacker's effective starting funding, not initial_eth,
+    when initial_state.balances overrides it — otherwise a no-theft scenario
+    funded above initial_eth reads verified."""
+
+    def _scenario(self, balances):
+        return AttackScenario(
+            vulnerability_class="reentrancy",
+            target_protocol="TestVault",
+            hypothesis="withdraw reenters",
+            attacker=AttackerModel(initial_eth=1.0),
+            initial_state=InitialState(
+                fork_url="https://example/rpc", fork_block=1,
+                target_contracts={"vault": "0xabc"},
+                balances=balances,
+            ),
+            steps=[
+                TransactionStep(step_id=1, caller="attacker", target="vault",
+                                function="deposit()", value_eth=0.4),
+                TransactionStep(step_id=2, caller="attacker", target="attacker",
+                                function="attack()"),
+            ],
+            success_conditions=[
+                SuccessCondition(
+                    expression="attacker.eth_balance_after > attacker.legitimate_entitlement",
+                    description="attacker ended with more ETH than their starting entitlement",
+                ),
+            ],
+        )
+
+    def _run_safe(self, balances):
+        scenario = self._scenario(balances)
+        executor = MockExecutor(contract_kinds={"vault": "SafeVault", "attacker": "ReentrantAttacker"})
+        result = executor.execute(scenario)
+        self.assertFalse(result.reverted, result.revert_reason)
+        return scenario, result
+
+    def test_larger_balances_override_sets_entitlement(self):
+        scenario, result = self._run_safe({"vault": 9.0, "attacker": 2.0})
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 2.0)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+    def test_smaller_balances_override_sets_entitlement(self):
+        scenario, result = self._run_safe({"vault": 9.0, "attacker": 0.5})
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 0.5)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+    def test_no_override_keeps_initial_eth_entitlement(self):
+        scenario, result = self._run_safe({"vault": 9.0})
+        self.assertEqual(result.state_vars["attacker"]["legitimate_entitlement"], 1.0)
+        verdict = Verifier().verify(scenario, result)
+        self.assertFalse(verdict.verified)
+        self.assertEqual(verdict.verdict, "resisted")
+
+
 class TestOracleManipulationLive(unittest.TestCase):
     def test_price_manipulation_enables_overborrow(self):
         """Attacker swaps into a thin pool to spike spot price, then
