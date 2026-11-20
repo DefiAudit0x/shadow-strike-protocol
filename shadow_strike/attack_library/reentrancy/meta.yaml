@@ -29,4 +29,3 @@ heuristic_source_patterns:
   - pattern: '.send('
     note: "legacy send() — same class of check as transfer()"
 
-attacker_template: attacker_template.sol.j2
