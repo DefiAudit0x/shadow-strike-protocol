@@ -136,6 +136,65 @@ class TestLangGraphFinalization(unittest.TestCase):
         self.assertEqual(state["attempt_count"], 4)
         self.assertEqual(state["stopped_reason"], "max_retries (3) exhausted without verification")
 
+    def test_all_node_written_keys_are_declared_in_state(self):
+        """Fix 8c (CodeRabbit Major on PR #30): every key a node writes must
+        be declared in ShadowStrikeState — in real LangGraph a node writes
+        only to declared state channels, so an undeclared
+        _critic_adjustment is dropped and the planner never receives the
+        critic's adjustment, silently disabling A08 in this backend."""
+        from shadow_strike.agent.graph_langgraph import ShadowStrikeState
+
+        declared = set(ShadowStrikeState.__annotations__)
+        for key in (
+            "_critic_adjustment",
+            "_llm_critic_notes",
+            "_llm_hypothesis_notes",
+            "_recon_functions",
+            "_recon_sensitive_calls",
+        ):
+            self.assertIn(key, declared)
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("langgraph") is not None, "real langgraph package not installed"
+    )
+    def test_real_langgraph_critic_adjustment_reaches_planner(self):
+        """Fix 8c: with the REAL langgraph package (not the fake harness),
+        the critic's increase_attacker_eth adjustment must reach the
+        planner — the retry scenario's attacker ETH doubles from 1.0 to
+        2.0. Before the fix the undeclared _critic_adjustment was dropped
+        by the state schema and the retry ran with the original 1.0 ETH.
+
+        The fake harness in this file leaks into sys.modules between
+        tests, so the module is re-imported here with the fake removed —
+        and the StateGraph identity is asserted, so a leaked fake fails
+        loudly instead of passing silently."""
+        module_name = "shadow_strike.agent.graph_langgraph"
+        for name in (module_name, "langgraph", "langgraph.graph"):
+            sys.modules.pop(name, None)
+        importlib.import_module("langgraph")
+        graph_module = importlib.import_module(module_name)
+        self.assertTrue(
+            graph_module.StateGraph.__module__.startswith("langgraph"),
+            f"expected the real langgraph StateGraph, got {graph_module.StateGraph}",
+        )
+        graph = graph_module.build_graph(
+            executor=MockExecutor(contract_kinds={"vault": "SafeVault", "attacker": "ReentrantAttacker"}),
+            verifier=Verifier(),
+            library=AttackLibrary(),
+            llm_fn=lambda prompt: "increase_attacker_eth",
+            max_retries=3,
+            target_contracts={"vault": "0xabc"},
+        )
+        state = graph.invoke({
+            "target_contract_source": self.SOURCE,
+            "target_protocol_name": "GraphTestVault",
+            "attempt_count": 0,
+            "history": [],
+        })
+        self.assertEqual(state["current_scenario"].attacker.initial_eth, 2.0)
+        self.assertEqual(state["attempt_count"], 4)
+        self.assertEqual(state["stopped_reason"], "max_retries (3) exhausted without verification")
+
 
 if __name__ == "__main__":
     unittest.main()

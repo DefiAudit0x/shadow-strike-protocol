@@ -51,6 +51,16 @@ class ShadowStrikeState(TypedDict, total=False):
     planner_error: str | None
     planner_detail: str | None
     stopped_reason: str | None
+    # Fix 8c: every key a node writes must be declared here. In real
+    # LangGraph a node writes only to declared state channels, so an
+    # undeclared key is silently dropped — before this, _critic_adjustment
+    # never reached the planner and the critic's adjustments (A08) were
+    # dead in this backend.
+    _critic_adjustment: str | None
+    _llm_critic_notes: str | None
+    _llm_hypothesis_notes: str | None
+    _recon_functions: list
+    _recon_sensitive_calls: list
 
 
 def build_graph(executor, verifier=None, library=None, llm_fn=None, max_retries: int = 3,
