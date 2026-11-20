@@ -25,4 +25,3 @@ heuristic_source_patterns:
   - pattern: 'onlyOwner'
     note: "modifier present — verify it is actually applied to every sensitive function, not just named ones"
 
-attacker_template: attacker_template.sol.j2
