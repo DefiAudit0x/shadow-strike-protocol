@@ -26,6 +26,9 @@ Run: PYTHONPATH=. python3 examples/run_demo.py
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 from shadow_strike.agent.graph_simple import SimpleShadowStrikeGraph
@@ -36,6 +39,34 @@ from shadow_strike.storage.db import KnowledgeStore
 from shadow_strike.attack_library.registry import AttackLibrary
 
 ROOT = Path(__file__).parent.parent
+
+
+def validate_demo_outcomes(result, safe_result, safe_verdict):
+    if not result.get("final_proof") or not result.get("verifier_verdict"):
+        raise RuntimeError("positive control did not produce verified evidence")
+    if not result["verifier_verdict"].verified:
+        raise RuntimeError("positive control verdict was not verified")
+    if safe_result.reverted and safe_result.revert_reason:
+        raise RuntimeError(f"negative control execution errored: {safe_result.revert_reason}")
+    if safe_verdict.verified:
+        raise RuntimeError("negative control unexpectedly verified")
+
+
+def validate_rendered_contract(path: Path) -> None:
+    # The demo gates on a REAL compiler check: the emitted file must build.
+    # The toolchain comes from the caller's environment (FOUNDRY_SOLC /
+    # FOUNDRY_REMAPPINGS set by the local harness, or the repo's own
+    # foundry.toml + lib/forge-std in a normal checkout / CI) — never from
+    # hardcoded paths, so this works in any checkout.
+    if shutil.which("forge") is None:
+        raise RuntimeError("forge is not on PATH; cannot validate the rendered contract")
+    relative = path.relative_to(ROOT)
+    completed = subprocess.run(
+        ["forge", "build", str(relative)], cwd=ROOT, env=os.environ.copy(),
+        capture_output=True, text=True,
+    )
+    if completed.returncode:
+        raise RuntimeError(f"forge build failed for {relative}:\n{completed.stdout}{completed.stderr}")
 
 
 def section(title: str):
@@ -137,6 +168,7 @@ def main():
     )
     print(f"written: {out_path.relative_to(ROOT)}")
     print(f"(compile only: forge build {out_path.relative_to(ROOT)})")
+    validate_rendered_contract(out_path)
 
     # ---- re-run the IDENTICAL scenario against the PATCHED contract -----
     section("STEP 9 — re-running the identical scenario against SafeVault (patched)")
@@ -145,6 +177,7 @@ def main():
     safe_verdict = verifier.verify(scenario, safe_result)
     print(f"reverted={safe_result.reverted}  revert_reason={safe_result.revert_reason!r}")
     print(f"verified={safe_verdict.verified}  (expected: False — the fix holds)")
+    validate_demo_outcomes(result, safe_result, safe_verdict)
 
     # ---- generate a DeFiAudit-style finding from the verified proof -----
     if result["final_proof"]:

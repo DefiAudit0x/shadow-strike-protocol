@@ -14,6 +14,11 @@ HERE = Path(__file__).parent.parent / "examples" / "historical_incidents"
 
 
 class TestHistoricalIncidents(unittest.TestCase):
+    def test_parity_reference_address_is_valid(self):
+        scenario = load_scenario_yaml(HERE / "parity_wallet_2017_initialization.yaml")
+        address = scenario.initial_state.target_contracts["vault"]
+        self.assertRegex(address, r"^0x[0-9a-fA-F]{40}$")
+
     def test_the_dao_reentrancy_verifies(self):
         scenario = load_scenario_yaml(HERE / "the_dao_2016_reentrancy.yaml")
         executor = MockExecutor(contract_kinds={"vault": "VulnerableVault", "attacker": "ReentrantAttacker"})
