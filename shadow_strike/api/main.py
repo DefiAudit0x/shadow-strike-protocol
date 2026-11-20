@@ -79,7 +79,13 @@ def create_run(req: RunRequest):
 
     scenario = result.get("current_scenario")
     if scenario is not None:
-        store.save_scenario(scenario)
+        # Sync endpoints run in a worker thread; the module-level SQLite
+        # connection belongs to the importing thread, so use a local one.
+        run_store = KnowledgeStore(db_path=store.db_path)
+        try:
+            run_store.save_scenario(scenario)
+        finally:
+            run_store.close()
 
     return {
         "scenario_id": scenario.scenario_id if scenario else None,
