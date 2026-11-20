@@ -5,7 +5,13 @@ same as reentrancy.
 """
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
+
+# Keep direct execution equivalent to discovery from the repository root.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shadow_strike.agent.nodes import scenario_planner_node
 from shadow_strike.core.models import (
@@ -45,10 +51,6 @@ class TestAccessControlLive(unittest.TestCase):
             contract_kinds={"admin": "AccessControlTarget"},
             contract_params={"admin": {"owner": "deployer", "enforce_check": False}},
         )
-        # AccessControlTarget doesn't expose eth_balance state the same way;
-        # extend state_vars manually via a thin wrapper is unnecessary here —
-        # MockExecutor's generic before/after loop only tracks ETH, so we
-        # read last_caller directly off the live contract object instead.
         ledger_result = executor.execute(s)
         admin_contract = None
         for entry in ledger_result.call_trace:
@@ -57,6 +59,10 @@ class TestAccessControlLive(unittest.TestCase):
         self.assertIsNotNone(admin_contract, "privilegedAction() should have been called and logged")
         self.assertEqual(admin_contract["caller"], "attacker")
         self.assertFalse(ledger_result.reverted)
+        verdict = Verifier().verify(s, ledger_result)
+        self.assertTrue(verdict.verified)
+        self.assertTrue(verdict.condition_results[0]["passed"])
+        self.assertIsNone(verdict.condition_results[0]["error"])
 
     def test_enforced_guard_blocks_attacker(self):
         s = self._scenario()
@@ -200,10 +206,6 @@ class TestOracleManipulationLive(unittest.TestCase):
         self.assertFalse(verdict.verified, "a deep pool should not be meaningfully manipulable by this swap size")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestLLMHookWiring(unittest.TestCase):
     """Proves the llm_fn plumbing itself works end-to-end (recon ->
     hypothesis -> critic all accept and invoke it) without needing
@@ -255,3 +257,7 @@ class TestReportGenerator(unittest.TestCase):
         self.assertIn("Critical", md)
         self.assertIn("VERIFIED", md)
         self.assertIn("mock engine", md)
+
+
+if __name__ == "__main__":
+    unittest.main()

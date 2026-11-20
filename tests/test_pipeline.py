@@ -92,6 +92,11 @@ class TestScenarioValidation(unittest.TestCase):
 
 
 class TestSafeEval(unittest.TestCase):
+    def test_division_by_zero_raises(self):
+        for expression in ("1 / 0", "1 // 0", "1 % 0", "attacker.balance / vault.balance"):
+            with self.subTest(expression=expression), self.assertRaises(ZeroDivisionError):
+                safe_eval(expression, {"attacker": {"balance": 1}, "vault": {"balance": 0}})
+
     def test_basic_arithmetic_and_compare(self):
         ctx = {"a": {"x": 10}, "b": {"x": 3}}
         self.assertTrue(safe_eval("a.x - b.x > 5", ctx))
