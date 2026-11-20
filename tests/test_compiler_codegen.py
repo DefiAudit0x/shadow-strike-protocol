@@ -378,3 +378,93 @@ def test_k11b_nonzero_value_attack_funded_by_receiver(tmp_path):
     assert logs["attacker_eth_before"] == 10 ** 18
     assert logs["attacker_eth_after"] == 37 * 10 ** 17
     assert logs["attacker_eth_after"] - logs["attacker_eth_before"] == 27 * 10 ** 17
+
+
+def test_k11c_synthesized_interface_declares_split_deposit(tmp_path):
+    """11c (CodeRabbit, Major): the 11b value split emits a deposit call
+    on the primary target — when that target has no target_types, its
+    synthesized interface is built only from steps that target it
+    directly, so an attack-only scenario leaves the interface empty and
+    the generated test cannot compile. The interface must declare
+    deposit(). Fails on the 11b code (forge build fails: deposit is not
+    a member of the empty synthesized interface)."""
+    if not os.environ.get("FOUNDRY_SOLC"):
+        pytest.skip("needs the Foundry toolchain (FOUNDRY_SOLC)")
+    forge = shutil.which("forge")
+    if forge is None:
+        pytest.skip("forge binary not on PATH")
+    root = Path(__file__).resolve().parents[1]
+    shutil.copytree(root / "contracts/src", tmp_path / "contracts/src")
+    shutil.copy(root / "foundry.toml", tmp_path / "foundry.toml")
+    data = scenario(
+        scenario_id="k11ciface",
+        attacker=AttackerModel(initial_eth=1.0),
+        initial_state=InitialState(
+            fork_url="", fork_block=0,
+            target_contracts={"custom": "0x1111111111111111111111111111111111111111"},
+            balances={},
+        ),
+        steps=[TransactionStep(1, "attacker", "attacker", "attack()", value_eth=0.9)],
+    )
+    # No target_types: the target interface is synthesized.
+    path = ScenarioCompiler().compile_to_file(
+        data, tmp_path / "contracts/test/generated",
+        attacker_contract_name="MaliciousReceiver_demo")
+    source = path.read_text()
+    assert "interface IShadowStrike_custom { function deposit() external payable; }" in source
+    assert "custom.deposit{value: 0.9 ether}();" in source
+    build = subprocess.run(
+        [forge, "build", "--root", str(tmp_path), "--offline"],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
+
+
+def test_k11c_expected_revert_value_attack_is_atomic(tmp_path):
+    """11c (CodeRabbit, Minor): an attack() step with value AND
+    expected_revert must stay one atomic call — splitting the deposit
+    out would commit it even when attack() reverts (and could fail
+    outside the expected-revert scope). The generator keeps the value
+    on attack() and funds the test contract with exactly the stake
+    (it rolls back with the revert; no gain is measured for a reverted
+    step). Fails on the 11b code (the deposit is split out before
+    expectRevert is armed). Verified by source + forge build: a forge
+    RUN is not constructible here — the vulnerable Vault never reverts
+    a value-bearing attack (its reentry guard stops the drain when the
+    vault is empty, so the call succeeds), and SafeVault has no
+    generator-deployable interface — so the runtime atomicity rests on
+    the single-call form itself (a revert rolls back the whole call,
+    including the inner deposit)."""
+    if not os.environ.get("FOUNDRY_SOLC"):
+        pytest.skip("needs the Foundry toolchain (FOUNDRY_SOLC)")
+    forge = shutil.which("forge")
+    if forge is None:
+        pytest.skip("forge binary not on PATH")
+    root = Path(__file__).resolve().parents[1]
+    shutil.copytree(root / "contracts/src", tmp_path / "contracts/src")
+    shutil.copy(root / "foundry.toml", tmp_path / "foundry.toml")
+    data = scenario(
+        scenario_id="k11catomic",
+        attacker=AttackerModel(initial_eth=1.0),
+        initial_state=InitialState(
+            fork_url="", fork_block=0,
+            target_contracts={"vault": "0x1111111111111111111111111111111111111111"},
+            balances={},
+        ),
+        steps=[TransactionStep(
+            1, "attacker", "attacker", "attack()", value_eth=0.9, expected_revert=True)],
+        success_conditions=[SuccessCondition(
+            "attacker.eth_balance_after == attacker.eth_balance_before", "observation")],
+    )
+    compiler = ScenarioCompiler(target_types={"vault": "IVault"})
+    out = tmp_path / "contracts/test/generated"
+    path = compiler.compile_to_file(data, out, attacker_contract_name="MaliciousReceiver_demo")
+    source = path.read_text()
+    assert "vm.deal(address(this), 0.9 ether);" in source
+    assert "attacker.attack{value: 0.9 ether}();" in source
+    assert "vault.deposit{value: 0.9 ether}();" not in source
+    build = subprocess.run(
+        [forge, "build", "--root", str(tmp_path), "--offline"],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
