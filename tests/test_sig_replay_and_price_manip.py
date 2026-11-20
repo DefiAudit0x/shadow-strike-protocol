@@ -123,6 +123,11 @@ class TestPriceManipulationLive(unittest.TestCase):
         result = executor.execute(s)
         verdict = Verifier().verify(s, result)
         self.assertFalse(verdict.verified)
+        self.assertFalse(result.reverted, result.revert_reason)
+        self.assertTrue(result.state_vars)
+        self.assertEqual(verdict.verdict, "resisted")
+        self.assertTrue(verdict.condition_results)
+        self.assertTrue(all(c["error"] is None for c in verdict.condition_results))
         self.assertAlmostEqual(result.state_vars["vault"]["victim_claim_eth"], 1.0, places=8)
 
 

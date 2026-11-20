@@ -49,7 +49,8 @@ class TestBenchmarkRunner(unittest.TestCase):
             executors={},  # nothing configured
         )
         statuses = {r.status for r in report.results}
-        self.assertTrue(statuses.issubset({"no_executor"}))
+        self.assertEqual({r.vulnerability_class for r in report.results}, {"reentrancy", "access_control"})
+        self.assertEqual(statuses, {"no_executor"})
 
     def test_scorecard_is_nonempty_string(self):
         report = run_benchmark(
