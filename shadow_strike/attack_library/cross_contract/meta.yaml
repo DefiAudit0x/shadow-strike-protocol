@@ -12,9 +12,7 @@ default_invariants: []
 # definition, a statement about the RELATIONSHIP between two particular
 # contracts, not something generic enough to default here.
 
-default_success_conditions:
-  - expression: "attacker.exploited_trust_boundary == true"
-    description: "Attacker used contract B's permissiveness to violate an assumption contract A relied on"
+default_success_conditions: []
 
 heuristic_source_patterns:
   - pattern: 'IExternal'
