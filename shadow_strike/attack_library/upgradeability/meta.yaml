@@ -9,12 +9,9 @@ description: >
   pre-Cancun; post-Cancun selfdestruct no longer deletes code but can
   still drain the implementation's own balance).
 
-default_invariants:
-  - "proxy.implementation_after_upgrade == proxy.authorized_implementation"
+default_invariants: []
 
-default_success_conditions:
-  - expression: "attacker.controls_implementation_slot == true"
-    description: "Attacker set the proxy's implementation to an address of their choosing"
+default_success_conditions: []
 
 heuristic_source_patterns:
   - pattern: 'function upgradeTo('
