@@ -64,11 +64,12 @@ class ForgeRunner:
             "forge", "test",
             "--match-contract", contract_name,
             "--match-path", test_path.as_posix(),
-            "--fork-url", scenario.initial_state.fork_url,
-            "--fork-block-number", str(scenario.initial_state.fork_block),
             "-vvvv",
             "--json",
         ]
+        if scenario.initial_state.fork_url:
+            cmd.extend(["--fork-url", scenario.initial_state.fork_url,
+                        "--fork-block-number", str(scenario.initial_state.fork_block)])
         try:
             proc = self.sandbox.run(cmd, cwd=self.root)
         except SandboxLimitExceeded as e:
@@ -111,7 +112,8 @@ class ForgeRunner:
                     if m:
                         key, value = m.group(1), int(m.group(2))
                         state_vars[key] = value
-                if test_result.get("success") is False:
+                if test_result.get("success") is False or test_result.get("status") == "Failure":
+                    reverted = True
                     revert_reason = test_result.get("reason") or "assertion failed"
 
         state_vars = _nest_eth_vars(state_vars)
@@ -149,12 +151,10 @@ def _extract_state_diff(logs: list[str]) -> dict:
     forge-std vm.record()/vm.accesses() cheatcodes — not simulated) into
     {alias: {"slots_written": N, "written_slots": [hex, ...]}}."""
     diff: dict[str, dict] = {}
-    current_alias = None
     for line in logs:
         m = re.match(r"^(\w+)_slots_written:\s*(\d+)$", line.strip())
         if m:
-            current_alias = m.group(1)
-            diff.setdefault(current_alias, {"slots_written": int(m.group(2)), "written_slots": []})
+            diff.setdefault(m.group(1), {"slots_written": int(m.group(2)), "written_slots": []})
             continue
         m2 = re.match(r"^(\w+)_written_slot:\s*(0x[0-9a-fA-F]+)$", line.strip())
         if m2:
