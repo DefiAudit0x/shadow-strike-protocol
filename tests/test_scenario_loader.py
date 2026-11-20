@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from shadow_strike.core.scenario_loader import ScenarioFileError, load_scenario_yaml, save_scenario_yaml
 from shadow_strike.execution.mock_executor import MockExecutor
 from shadow_strike.verifier.verifier import Verifier
@@ -54,6 +56,37 @@ success_conditions:
 
 
 class TestScenarioLoader(unittest.TestCase):
+    def test_c10_structural_and_type_errors_are_wrapped(self):
+        cases = []
+        for field in ("attacker", "initial_state", "steps", "success_conditions"):
+            for value in (None, 1, "invalid", [1], {"unknown": 1}):
+                data = yaml.safe_load(VALID_YAML)
+                data[field] = value
+                cases.append(data)
+        for expression in (1, None, [], {}):
+            data = yaml.safe_load(VALID_YAML)
+            data["success_conditions"][0]["expression"] = expression
+            cases.append(data)
+        for calls in (None, 1, [1]):
+            data = yaml.safe_load(VALID_YAML)
+            data["initial_state"]["custom_setup_calls"] = calls
+            cases.append(data)
+        data = yaml.safe_load(VALID_YAML)
+        data.update({1: "unknown", "unknown": 1})
+        cases.append(data)
+        for field in ("initial_state", "steps", "success_conditions"):
+            data = yaml.safe_load(VALID_YAML)
+            del data[field]
+            cases.append(data)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.yaml"
+            for data in cases:
+                with self.subTest(data=data):
+                    path.write_text(yaml.safe_dump(data, sort_keys=False))
+                    with self.assertRaises(ScenarioFileError) as error:
+                        load_scenario_yaml(path)
+                    self.assertIn(str(path), str(error.exception))
+
     def test_loads_valid_yaml_and_runs_through_full_pipeline(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "scenario.yaml"
