@@ -89,7 +89,7 @@ def generate_finding_markdown(proof_artifact: dict, finding_id: str = "SS-001") 
 
 {condition_lines}
 
-**Invariants checked:**
+**Invariants checked (informational; do not affect the verdict):**
 
 {invariant_lines}
 
