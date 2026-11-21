@@ -1,68 +1,70 @@
 # Shadow Strike Protocol
 
-> مختبر محاكاة هجمات تفاعلي للعقود الذكية — يحوّل الفرضية الأمنية إلى هجوم
-> منفَّذ فعلياً، يُثبت عبر state transitions حقيقية، لا بتخمين من نموذج لغوي.
+> An interactive attack-simulation lab for smart contracts — it turns a
+> security hypothesis into an attack that is actually executed, proven
+> through real state transitions, not guessed by a language model.
 
-هذا تطبيق فعلي، يعمل، للأرشيتكتشر الموصوف في `ARCHITECTURE.md`. تم بناؤه
-بمبدأ واحد صارم: **الـ reasoning (LLM) لا يقرر أبداً إن نجح الهجوم —
-الـ execution + الـ verification الحتمي هما من يقرران.**
+This is a real, working implementation of the architecture described in
+`ARCHITECTURE.md`. It was built on one strict principle: **reasoning (the
+LLM) never decides whether an attack succeeded — deterministic execution +
+verification decide.**
 
-## التشغيل الفوري (بدون أي تثبيت)
+## Instant run (no installation)
 
-المحرك الأساسي يعمل بدون أي dependency خارجي باستثناء `jinja2` و`pyyaml`
-(كلاهما شائع ومتوفر غالباً بالفعل). لا حاجة لـ Foundry أو RPC أو مفتاح API
-لتجربة الـ pipeline كاملاً:
+The core engine runs with no external dependency except `jinja2` and
+`pyyaml` (both common and usually already installed). No Foundry, RPC, or
+API key is needed to try the full pipeline:
 
 ```bash
-pip install -r requirements.txt   # jinja2 + pyyaml فقط
+pip install -r requirements.txt   # jinja2 + pyyaml only
 PYTHONPATH=. python3 examples/run_demo.py
 ```
 
-هذا ينفّذ، فعلياً، لا نظرياً:
+This actually executes — in practice, not in theory:
 
-1. **Recon** حقيقي على `contracts/src/Vault.sol` (عقد فيه ثغرة reentrancy حقيقية)
-2. **Hypothesis generation** قائم على أنماط مكتبة الهجمات (`attack_library/`)
-3. **بناء AttackScenario** مُتحقَّق منه بالكامل (dataclass validation)
-4. **تنفيذ فعلي** للهجوم عبر محاكي EVM مصغّر (`MockExecutor`) — ليس ادعاءً،
-   بل ledger حقيقي للـ ETH مع دلالات reentrancy صحيحة
-5. **توليد Foundry test حقيقي** (`.t.sol`) من نفس الـ scenario بالضبط —
-   جاهز للتشغيل بـ `forge test` بمجرد توفر Foundry + RPC
-6. **Verification** حتمي عبر `safe_eval` (ليس `eval()` الخطير)
-7. **تخزين الإثبات** في Knowledge Store (SQLite)
-8. **إعادة نفس السيناريو بالضبط** ضد `SafeVault` (النسخة المُصلَحة) لإثبات
-   أن الإصلاح يصمد — `ATTACK FAILED` هنا هو النتيجة المطلوبة
+1. **Recon** that is real, on `contracts/src/Vault.sol` (a contract with a real reentrancy vulnerability)
+2. **Hypothesis generation** based on attack-library patterns (`attack_library/`)
+3. A fully validated **AttackScenario** build (dataclass validation)
+4. **Real execution** of the attack through a miniature EVM simulator (`MockExecutor`) — not a claim,
+   but a real ETH ledger with correct reentrancy semantics
+5. Generation of a real Foundry test (`.t.sol`) from that exact same scenario —
+   ready to run with `forge test` once Foundry + RPC are available
+6. Deterministic **Verification** via `safe_eval` (not the dangerous `eval()`)
+7. **Proof storage** in the Knowledge Store (SQLite)
+8. **Replaying the exact same scenario** against `SafeVault` (the fixed version) to prove
+   the fix holds — `ATTACK FAILED` here is the desired result
 
 ```bash
 PYTHONPATH=. python3 -m unittest discover -s tests -v
-PYTHONPATH=. python3 -m shadow_strike.cli library        # عرض مكتبة الهجمات
+PYTHONPATH=. python3 -m shadow_strike.cli library        # show the attack library
 ```
 
-## البنية
+## Layout
 
 ```
 shadow_strike/
 ├── core/            # AttackScenario schema + safe_eval (zero deps)
-├── attack_library/  # plugins: reentrancy (كامل), access_control (كامل),
+├── attack_library/  # plugins: reentrancy (complete), access_control (complete),
 │                     #          oracle_manipulation / flash_loan (roadmap)
 ├── execution/
-│   ├── compiler.py          # Scenario -> Foundry .t.sol حقيقي
-│   ├── foundry_runner.py    # تنفيذ إنتاجي حقيقي (يتطلب forge + RPC)
-│   └── mock_executor.py     # تنفيذ فوري بدون شبكة (للتطوير/العرض/CI)
-├── verifier/        # القاضي الحتمي — لا LLM هنا إطلاقاً
-├── storage/         # Knowledge Store (SQLite هنا، Postgres في الإنتاج)
+│   ├── compiler.py          # Scenario -> real Foundry .t.sol
+│   ├── foundry_runner.py    # real production execution (requires forge + RPC)
+│   └── mock_executor.py     # instant execution without a network (for dev/demo/CI)
+├── verifier/        # the deterministic judge — no LLM here at all
+├── storage/         # Knowledge Store (SQLite here, Postgres in production)
 ├── agent/
-│   ├── nodes.py             # العقد الستة: recon/hypothesis/planner/
+│   ├── nodes.py             # the six nodes: recon/hypothesis/planner/
 │   │                         # executor/verifier/critic
-│   ├── graph_simple.py      # منسّق بدون dependencies — يعمل الآن
-│   └── graph_langgraph.py   # نسخة LangGraph الإنتاجية (pip install langgraph)
+│   ├── graph_simple.py      # dependency-free coordinator — works now
+│   └── graph_langgraph.py   # production LangGraph version (pip install langgraph)
 ├── api/main.py      # FastAPI (pip install fastapi uvicorn)
 └── cli.py
 
 contracts/
-├── src/Vault.sol              # الهدف الضعيف (reentrancy حقيقي)
-├── src/SafeVault.sol          # نفس الواجهة، مُصلَح
-├── src/attackers/             # عقود المهاجم المكتوبة يدوياً
-└── test/                       # Foundry tests (يدوي + مولَّد تلقائياً)
+├── src/Vault.sol              # the vulnerable target (real reentrancy)
+├── src/SafeVault.sol          # same interface, fixed
+├── src/attackers/             # hand-written attacker contracts
+└── test/                       # Foundry tests (hand-written + auto-generated)
 ```
 
 ## API security and jobs
@@ -91,83 +93,82 @@ The placeholder streaming WebSocket was removed; job polling is the supported
 progress interface. Importing `shadow_strike.api.main` does not create the
 SQLite database; the configured store is opened only when persistence is used.
 
-## ما اكتمل منذ النسخة الأولى
+## What has been completed since the first version
 
-| العنصر | الحالة |
+| Item | Status |
 |---|---|
-| 11/11 نوع ثغرة في مكتبة الهجمات | مسجَّلة كبيانات وصفية في `meta.yaml`؛ السيناريوهات الآلية تحتاج builder مسجَّلاً ودعم executor. لا تُولَّد عقود المهاجم من المكتبة؛ يمرَّر عقد Solidity مكتوب يدوياً إلى compiler عند الحاجة |
-| `oracle_manipulation` حي | `SimplePool` + `OracleFedLendingMarket` + `OracleManipulationAttacker` في `mock_executor.py` — هجوم تلاعب بالسعر فعلي ومُختبَر (pool رقيق يُستغل، pool عميق يصمد) |
-| `access_control` حي | `AccessControlTarget` — حارس مكسور يُستغل، حارس مُفعَّل يصدّ الهجوم |
-| حدود موارد Forge | `execution/sandbox.py` يفرض حدود CPU والذاكرة على المضيف عبر `resource.setrlimit`؛ حاوية Docker للاستخدام اليدوي فقط |
-| `state_diff` حقيقي | `compiler.py` يُولّد `vm.record()`/`vm.accesses()` (cheatcodes حقيقية من forge-std)، `foundry_runner.py` يفكّك الناتج |
-| ربط LLM حقيقي | `agent/llm_providers.py` — `AnthropicLLM` (stdlib فقط، بلا SDK) جاهز لمفتاح API حقيقي؛ `EchoLLM` للاختبار بدون شبكة (مُختبَر حياً) |
-| ربط DeFiAudit | `reporting/report_generator.py` — يحوّل أي proof إلى Markdown finding بصيغة تدقيق احترافية (مُختبَر حياً، انظر المثال في `examples/run_demo.py` الخطوة 10) |
-| Postgres للإنتاج | `storage/postgres_store.py` — نفس واجهة `KnowledgeStore` بالضبط (drop-in) + `migrate_from_sqlite()` |
+| 11/11 vulnerability classes in the attack library | Registered as metadata in `meta.yaml`; automated scenarios need a registered builder and executor support. Attacker contracts are not generated from the library; a hand-written Solidity contract is passed to the compiler when needed |
+| `oracle_manipulation` live | `SimplePool` + `OracleFedLendingMarket` + `OracleManipulationAttacker` in `mock_executor.py` — a real, tested price-manipulation attack (a thin pool is exploited, a deep pool holds) |
+| `access_control` live | `AccessControlTarget` — a broken guard is exploited, an enabled guard blocks the attack |
+| Forge resource limits | `execution/sandbox.py` enforces host CPU and memory limits via `resource.setrlimit`; the Docker container is manual-only |
+| Real `state_diff` | `compiler.py` generates `vm.record()`/`vm.accesses()` (real forge-std cheatcodes), `foundry_runner.py` parses the output |
+| Real LLM wiring | `agent/llm_providers.py` — `AnthropicLLM` (stdlib only, no SDK) ready for a real API key; `EchoLLM` for offline testing (verified live) |
+| DeFiAudit integration | `reporting/report_generator.py` — turns any proof into a professional audit-format Markdown finding (verified live, see the example in `examples/run_demo.py` step 10) |
+| Postgres for production | `storage/postgres_store.py` — exactly the same `KnowledgeStore` interface (drop-in) + `migrate_from_sqlite()` |
 
-**ملاحظة صدق مهمة**: العناصر التالية مكتوبة ومفحوصة بنيوياً (`py_compile`) لكن **غير مُختبَرة حياً** في هذه البيئة لأنها تحتاج شبكة/dependencies غير متوفرة هنا: `AnthropicLLM` (يحتاج مفتاح API حقيقي)، `postgres_store.py` (يحتاج `sqlalchemy`+Postgres)، `api/main.py` (يحتاج `fastapi`)، تفاصيل `foundry_runner.py` الدقيقة لتنسيق `--json` (تحتاج Foundry حقيقياً — الشكل العام موثق لكن إصدارات forge المختلفة قد تغيّر شكل الـ JSON قليلاً، فاختبره أول استخدام).
+**Important honesty note**: the following items are written and structurally checked (`py_compile`) but **not verified live** in this environment because they need a network / dependencies not available here: `AnthropicLLM` (needs a real API key), `postgres_store.py` (needs `sqlalchemy` + Postgres), `api/main.py` (needs `fastapi`), the fine details of `foundry_runner.py`'s `--json` format (needs a real Foundry — the general shape is documented, but different forge versions may change the JSON shape slightly, so test it on first use).
 
-## ما اكتمل في هذه الجولة (packaging + CI + التأليف اليدوي)
+## What was completed in this round (packaging + CI + hand-authored scenarios)
 
-| العنصر | الحالة |
+| Item | Status |
 |---|---|
-| `pyproject.toml` | حزمة Python حقيقية، **مُختبَرة حياً**: `pip install -e .` نجح، وأمر `shadow-strike library` اشتغل من مجلد `/tmp` (خارج مجلد المشروع تماماً) — إثبات أن الـ packaging سليم فعلياً |
-| `.github/workflows/ci.yml` | 4 jobs: اختبارات على 3.10/3.11/3.12، lint، Foundry tests محلية (بدون fork — تعمل حتى من forks)، فحص استيراد الوحدات الإنتاجية |
-| `Makefile` | `make test` / `make demo` / `make sandbox-selftest` — **مُختبَرة حياً** |
-| **التأليف اليدوي للسيناريوهات (`core/scenario_loader.py`)** | هذا هو المسار الفعلي لأنواع `accounting`/`upgradeability`/`cross_contract`/`economic` التي لا بانٍ تلقائي لها: تكتب السيناريو بصيغة YAML، يمر بنفس تحقق `AttackScenario` بالضبط، ثم يشتغل بنفس الـ pipeline. **مُختبَر حياً بالكامل**: `shadow-strike run-scenario --file examples/scenarios/reentrancy_demo.yaml` نفّذ الهجوم وتحقق منه عبر الأمر المثبَّت فعلياً؛ `shadow-strike save-scenario` صدّر النتيجة رجوعاً كـ YAML قابل للتعديل |
-| `dashboard/index.html` | واجهة مراقبة/تشغيل بسيطة تستهلك `api/main.py` — بدون build step، بدون CDN خارجي. **غير مُختبَرة حياً** (تحتاج `uvicorn` يعمل فعلياً) |
+| `pyproject.toml` | A real Python package, **verified live**: `pip install -e .` succeeded, and the `shadow-strike library` command ran from `/tmp` (entirely outside the project folder) — proof the packaging is genuinely sound |
+| `.github/workflows/ci.yml` | 4 jobs: tests on 3.10/3.11/3.12, lint, local Foundry tests (no fork — they work even from forks), production-module import check |
+| `Makefile` | `make test` / `make demo` / `make sandbox-selftest` — **verified live** |
+| **Hand-authored scenarios (`core/scenario_loader.py`)** | This is the real path for the `accounting` / `upgradeability` / `cross_contract` / `economic` classes, which have no automatic builder: you write the scenario in YAML, it goes through the exact same `AttackScenario` validation, then runs through the same pipeline. **Fully verified live**: `shadow-strike run-scenario --file examples/scenarios/reentrancy_demo.yaml` executed and verified the attack via the actually installed command; `shadow-strike save-scenario` exported the result back as editable YAML |
+| `dashboard/index.html` | A simple monitoring/run dashboard consuming `api/main.py` — no build step, no external CDN. **Not verified live** (needs a `uvicorn` actually running) |
 
 ```bash
-# أي باحث يضيف سيناريو يدوي لنوع ثغرة بلا builder تلقائي:
+# Any researcher adding a hand-written scenario for a vulnerability class with no automatic builder:
 shadow-strike run-scenario --file my_scenario.yaml --engine mock \
     --mock-kinds vault=VulnerableVault --mock-kinds attacker=ReentrantAttacker
 ```
 
-## 11/11 — كل نوع ثغرة صار له إثبات تنفيذ حي الآن
+## 11/11 — every vulnerability class now has a live execution proof
 
-أضفت 3 أمثلة مكتوبة يدوياً تغطي آخر 3 أنواع كانت roadmap بالكامل:
+I added 3 hand-written examples covering the last 3 classes that were entirely roadmap:
 
-- **`cross_contract`**: `TrustingRouter` يسمح لأي حد يغيّر "العقد الموثوق" اللي يستشيره للتفويض — المهاجم يحوّل الثقة لعقد يتحكم فيه، يصرّح لنفسه بأي مبلغ. مُختبَر حياً بما فيها حالة "لو ما كان فيه hijack، العقد الشرعي كان يرفض نفس الطلب".
-- **`upgradeability`**: `VulnerableProxy` بدون access control على `upgradeTo()` + تصادم storage حقيقي — implementation خبيث يكتب فوق slot الـ owner مباشرة. مُختبَر حياً.
-- **`economic`**: `SelfLiquidationMarket` — bonus تصفية سخي جداً يخلي المهاجم يصفّي مركزه الخاص بربح، بدون أي تلاعب سعر أو ثغرة كود، مجرد رياضيات الحوافز. **لقيت وأصلحت bug اقتصادي ثالث هنا بالتشغيل الفعلي**: أول نسخة كانت تحدّ الـ payout بسقف collateral المهاجم نفسه، وهذا يخلي الربح الحقيقي مستحيل رياضياً مهما كان الـ bonus كبير — صلّحتها (الحد الحقيقي لازم يكون سيولة البروتوكول، مو رأسمال المهاجم نفسه)، وأثبتّ النسختين: bonus سخي (20%) = ربح فعلي، bonus محافظ (5%) = خسارة فعلية.
+- **`cross_contract`**: `TrustingRouter` lets anyone change the "trusted contract" it consults for authorization — the attacker points trust at a contract they control and authorizes themselves for any amount. Verified live, including the case where, with no hijack, the legitimate contract rejects the same request.
+- **`upgradeability`**: `VulnerableProxy` with no access control on `upgradeTo()` + a real storage collision — a malicious implementation writes directly over the owner slot. Verified live.
+- **`economic`**: `SelfLiquidationMarket` — an overly generous liquidation bonus lets the attacker liquidate their own position at a profit, with no price manipulation or code bug, just incentive math. **Found and fixed a third economic bug here by actually running it**: the first version capped the payout at the attacker's own collateral, which makes a real profit mathematically impossible no matter how large the bonus — fixed it (the real cap must be the protocol's liquidity, not the attacker's own capital), and proved both versions: a generous bonus (20%) = real profit, a conservative bonus (5%) = real loss.
 
-النتيجة: **كل الـ11 نوع (مش بس الـ7 اللي عندهم builder تلقائي) عندهم الآن إثبات تنفيذ حي مُختبَر** — الفرق الوحيد إن الـ4 أنواع دي تمر عبر مسار التأليف اليدوي (YAML) بدل البناء التلقائي، وهذا مطابق تماماً لتصميم الأرشيتكتشر الأصلي.
+The result: **all 11 classes (not just the 7 with automatic builders) now have a live, verified execution proof** — the only difference is that these 4 classes go through the hand-authored (YAML) path instead of automatic building, which matches the original architecture design exactly.
 
-## flash_loan وaccounting — آخر فجوتين
+## flash_loan and accounting — the last two gaps
 
-- **`flash_loan` صار حي بالكامل** — مش builder مستقل (مصمَّم عمداً إنه يتركّب مع نوع ثاني، شوف `composes_with` في الـ meta.yaml)، لكن الآن عندي `MockFlashLender` + `FlashLoanReentrantAttacker` حقيقيين: مهاجم **برأس مال صفر** يقترض عبر flash loan، يدخل بنفس نمط الـ reentrancy، يسدد القرض + العمولة، ويطلع بربح صافي. مُختبَر حياً بما فيها حساسية العمولة (عمولة أعلى = ربح أقل، فحصتها رقمياً). كل الـ7 أنواع اللي عندها template صار عندها تنفيذ حي الآن (7/7).
-- **مثال عملي لـ `accounting`** — هذا النوع ما له builder تلقائي عمداً (الأرشيتكتشر يقول صراحة إن أخطاء المحاسبة خاصة بكل بروتوكول). بدل ما أسيبه نظري بالكامل، بنيت مثال مكتوب يدوياً: `UncheckedBalanceToken` — bug حقيقي (uint256 underflow من عملية `unchecked`)، مهاجم بصفر توكنات يحوّل أكثر من رصيده فيطفح الرصيد لـ 2^256 بالضبط. مُختبَر حياً، بما فيها النسخة المُصلَحة (checked=True) اللي ترفض العملية بدل ما تطفح.
+- **`flash_loan` is now fully live** — not a standalone builder (deliberately designed to compose with another class, see `composes_with` in meta.yaml), but I now have a real `MockFlashLender` + `FlashLoanReentrantAttacker`: a **zero-capital** attacker borrows via flash loan, enters with the same reentrancy pattern, repays the loan + fee, and walks away with a net profit. Verified live, including fee sensitivity (a higher fee = less profit, checked numerically). All 7 classes that have a template now have live execution (7/7).
+- **A practical `accounting` example** — this class deliberately has no automatic builder (the architecture states explicitly that accounting bugs are protocol-specific). Instead of leaving it entirely theoretical, I built a hand-written example: `UncheckedBalanceToken` — a real bug (uint256 underflow from an `unchecked` operation); an attacker with zero tokens transfers 1000 tokens they never held, wrapping the sender-side balance to 2^256 − 1000 (a uint256 can never hold 2^256 itself). Verified live, including the fixed version (checked=True) that rejects the operation instead of overflowing.
 
-## تنظيف ما بعد الأفكار الخمس
+## Cleanup after the five ideas
 
-- **`signature_replay` و`price_manipulation` أصبحا حيين** (كان عندهم template بس بدون mock) — الآن 6 من أصل 7 أنواع مُشفّرة لها تنفيذ حي ومُختبَر (الوحيد الناقص: `flash_loan`، لأنه composable مع غيره حسب تصميمه الأصلي).
-- **bug حقيقي ثاني انكشف بالتشغيل الفعلي**: أول نسخة من سيناريو `price_manipulation` كانت تفحص `total_shares` فور هجوم المهاجم نفسه — وهذا ما يميّز فعلياً بين vault ضعيف وآخر محصّن (الاثنين يبدآن قريب من صفر بعد إيداع صغير واحد). الإصلاح: إضافة خطوة إيداع "ضحية" بعد التلاعب، وفحص حصتها هي — هذا هو التوقيع الحقيقي للاستغلال.
-- **تكرار كود حقيقي انكشف واتنظّف**: لقيت نسختين متوازيتين من نفس المنطق (`SignatureReplayTarget`/`ShareVault` مقابل `SignedActionTarget`/`ERC4626LikeVault`) بأسماء مختلفة في نفس الملف — دمجتهم لنسخة واحدة مُختبَرة، وحذفت ملف الاختبار اليتيم المرتبط بالنسخة المحذوفة.
-- **`/benchmark` و`/sentinel/hypothesis`** أُضيفا لـ `api/main.py` — الـ API الآن يغطي كل الأفكار الخمس، مو بس التشغيل العادي.
-- **`CONTRIBUTING.md`** — دليل كامل لإضافة نوع ثغرة جديد، خطوة بخطوة.
-- **`CHANGELOG.md`** — سجل كامل لرحلة البناء، صادق بالتمييز بين "مُختبَر حياً" و"مكتوب بس يحتاج بنية تحتية".
+- **`signature_replay` and `price_manipulation` are now live** (they had a template but no mock) — now 6 of the 7 coded classes have live, verified execution (the only one missing: `flash_loan`, because it is composable with others by its original design).
+- **A second real bug exposed by actually running it**: the first version of the `price_manipulation` scenario checked `total_shares` right after the attacker's own attack — which does not actually distinguish a vulnerable vault from a hardened one (both start near zero after a single small deposit). The fix: add a "victim" deposit step after the manipulation and check her share — that is the real signature of the exploit.
+- **Real code duplication found and cleaned**: I found two parallel copies of the same logic (`SignatureReplayTarget`/`ShareVault` vs `SignedActionTarget`/`ERC4626LikeVault`) under different names in the same file — merged them into one verified copy and deleted the orphan test file tied to the deleted copy.
+- **`/benchmark` and `/sentinel/hypothesis`** were added to `api/main.py` — the API now covers all five ideas, not just plain runs.
+- **`CONTRIBUTING.md`** — a complete step-by-step guide to adding a new vulnerability class.
+- **`CHANGELOG.md`** — a full log of the build journey, honestly distinguishing "verified live" from "written but needs infrastructure".
 
-## الأفكار الخمس (من نقاش roadmap لاحق) — كلها مبنية ومُختبَرة حياً الآن
+## The five ideas (from a later roadmap discussion) — all built and verified live now
 
-| الفكرة | أين | الحالة |
+| Idea | Where | Status |
 |---|---|---|
-| **1. حوادث تاريخية حقيقية** | `examples/historical_incidents/` | 3 حوادث (The DAO, Parity Multisig freeze, Mango Markets) معاد بناؤها كسيناريوهات YAML و**مُتحقَّق منها حياً**. تحذير صادق مكتوب بوضوح: إعادة بناء مبسّطة من post-mortems عامة، مش replay حرفي لنفس الـ bytecode. Mango تحديداً مُعلَّم بوضوح إنه كان على Solana لا EVM |
-| **2. تكامل Axiom/Sentinel** | `shadow_strike/integrations/axiom_adapter.py` | واجهة Python نظيفة (`handle_sentinel_request`) — بمسارين: فرضية محددة من Sentinel، أو benchmark كامل لو ما عنده فرضية. **مُختبَرة حياً** بالمسارين. غير مربوطة بكود Axiom الفعلي (مش متوفر هنا) لكن العقد (contract) جاهز |
-| **3. مراقبة مستمرة** | `shadow_strike/monitoring/watcher.py` | منطق الـ dispatch/alert/regression-detection **مُختبَر حياً بالكامل** (synthetic events) — بما فيها اكتشاف أن upgrade رجّع ثغرة كانت مُصلَحة. أما الاستطلاع الفعلي على السلسلة (`EVMChainWatcher.poll`) فهو interface موثّق فقط، يرمي `NotImplementedError` بتوضيح صريح ليش (يحتاج RPC + web3.py حقيقيين) |
-| **4. Benchmark/scorecard** | `shadow_strike/benchmark/runner.py` | يجرّب كل نوع ثغرة تطابقه الـ heuristics بشكل مستقل، وينتج scorecard. **مُختبَر حياً** ضد عقد فيه نوعان من الثغرات معاً في نفس الوقت |
-| **5. مقال تقني** | `BLOG_POST.md` | مقال كامل جاهز للنشر (بالإنجليزية — افتراض بناءً على جمهورك الدولي على LinkedIn/Kaggle؛ قولّي لو تبيه بالعربي) |
+| **1. Real historical incidents** | `examples/historical_incidents/` | 3 incidents (The DAO, Parity Multisig freeze, Mango Markets) rebuilt as YAML scenarios and **verified live**. An honest warning is written clearly: simplified rebuilds from public post-mortems, not a literal replay of the same bytecode. Mango is specifically marked as having been on Solana, not EVM |
+| **2. Axiom/Sentinel integration** | `shadow_strike/integrations/axiom_adapter.py` | A clean Python interface (`handle_sentinel_request`) — with two paths: a specific hypothesis from Sentinel, or a full benchmark if it has none. **Verified live** on both paths. Not wired to the real Axiom code (not available here) but the contract is ready |
+| **3. Continuous monitoring** | `shadow_strike/monitoring/watcher.py` | The dispatch/alert/regression-detection logic is **fully verified live** (synthetic events) — including detecting that an upgrade reintroduced a previously fixed vulnerability. Actual on-chain polling (`EVMChainWatcher.poll`) is only a documented interface, raising `NotImplementedError` with an explicit explanation of why (it needs a real RPC + web3.py) |
+| **4. Benchmark/scorecard** | `shadow_strike/benchmark/runner.py` | Tries every vulnerability class its heuristics match independently and produces a scorecard. **Verified live** against a contract with two vulnerability classes at once |
+| **5. Technical article** | `BLOG_POST.md` | A complete article ready to publish (in English — an assumption based on your international audience on LinkedIn/Kaggle; tell me if you want it in Arabic) |
 
-## الترقية إلى الإنتاج الكامل
+## Upgrading to full production
 
-كل مكوّن "خفيف" هنا له بديل إنتاجي موثَّق داخل الكود نفسه (docstring في
-أعلى كل ملف يشرح الفرق بالضبط):
+Every "light" component here has a documented production alternative inside the code itself (a docstring at the top of each file explains the difference exactly):
 
-| هنا الآن (zero-dep) | الإنتاج |
+| Here now (zero-dep) | Production |
 |---|---|
-| `dataclasses` في `core/models.py` | Pydantic v2 (JSON schema export) |
-| `MockExecutor` | `ForgeRunner` (يتطلب Foundry وRPC عند استخدام fork) |
+| `dataclasses` in `core/models.py` | Pydantic v2 (JSON schema export) |
+| `MockExecutor` | `ForgeRunner` (requires Foundry and RPC when using a fork) |
 | `SimpleShadowStrikeGraph` | `graph_langgraph.py` (checkpointing, streaming) |
-| SQLite | Postgres (نفس الـ schema بالضبط) |
-| hypothesis/critic قائمين على heuristics | ربط `llm_fn` بأي عميل LLM حقيقي |
+| SQLite | Postgres (exactly the same schema) |
+| Heuristic-based hypothesis/critic | Wiring `llm_fn` to any real LLM client |
 
 The host subprocess is the only supported `ForgeRunner` execution path.
 Resource limits do not isolate filesystem or network access. The Docker
@@ -175,7 +176,7 @@ container is manual-only, and its [RPC egress allowlist](docker/egress-allowlist
 is aspirational and unenforced.
 
 ```bash
-# لتشغيل ضد Foundry حقيقي بمجرد توفره:
+# To run against a real Foundry once available:
 forge install foundry-rs/forge-std
 export MAINNET_RPC_URL=https://...
 python3 -m shadow_strike.cli run \
@@ -184,15 +185,16 @@ python3 -m shadow_strike.cli run \
     --fork-block 19000000 --engine foundry
 ```
 
-## تحذير أخلاقي وقانوني
+## Ethical and legal warning
 
-كل عقد مولَّد يحمل تعليقاً صريحاً: **لا تُشغّل أي سيناريو هنا ضد بروتوكول
-حقيقي لا تملكه أو لا تملك تفويضاً خطياً لاختباره.** هذا مختبر بحث أمني؛
-استخدامه خارج نطاق fork محلي/testnet/تفويض صريح من البروتوكول المستهدف
-يخرج عن الغرض الذي بُني من أجله بالكامل.
+Every generated contract carries an explicit comment: **do not run any
+scenario here against a real protocol you do not own or do not have written
+authorization to test.** This is a security-research lab; using it outside a
+local fork / testnet / explicit authorization from the target protocol is
+entirely outside the purpose it was built for.
 
-## التفاصيل المعمارية الكاملة
+## Full architectural details
 
-انظر `ARCHITECTURE.md` للأرشيتكتشر الكامل (17 قسماً)، بما فيها خارطة
-الطريق للمراحل القادمة (plugins إضافية لـ oracle manipulation وflash loan،
-sandboxing كامل عبر Docker، ربط مباشر بـ DeFiAudit).
+See `ARCHITECTURE.md` for the full architecture (17 sections), including the
+roadmap for upcoming phases (additional plugins for oracle manipulation and
+flash loan, full sandboxing via Docker, direct integration with DeFiAudit).
