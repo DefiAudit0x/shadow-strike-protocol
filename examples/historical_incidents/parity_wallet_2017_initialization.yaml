@@ -21,7 +21,7 @@ initial_state:
   fork_url: "https://eth-mainnet.example/rpc"
   fork_block: 4501637   # approximate block range of the real Nov 2017 incident
   target_contracts:
-    vault: "0x863df6bfa4469f3ead0be8f9f2aae51c91a907b"   # real WalletLibrary address, for reference only
+    vault: "0x863df6bfa4469f3ead0be8f9f2aae51c91a907b4"   # real WalletLibrary address, for reference only
 
 steps:
   - step_id: 1
