@@ -50,6 +50,11 @@ def validate_demo_outcomes(result, safe_result, safe_verdict):
         raise RuntimeError(f"negative control execution errored: {safe_result.revert_reason}")
     if safe_verdict.verified:
         raise RuntimeError("negative control unexpectedly verified")
+    # A non-reverting negative control can still be inconclusive: "error"
+    # and "inconclusive" both carry verified=False, so only an explicit
+    # "resisted" verdict proves the fix holds.
+    if safe_verdict.verdict != "resisted":
+        raise RuntimeError(f"negative control verdict was not 'resisted': {safe_verdict.verdict!r}")
 
 
 def validate_rendered_contract(path: Path) -> None:

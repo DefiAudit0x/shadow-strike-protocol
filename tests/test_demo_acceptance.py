@@ -34,11 +34,27 @@ class TestDemoAcceptance(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "negative control execution errored"):
             demo.validate_demo_outcomes(result, safe_result, SimpleNamespace(verified=False))
 
+    def test_error_verdict_fails_acceptance_gate(self):
+        result = {"final_proof": {"proof": True}, "verifier_verdict": SimpleNamespace(verified=True)}
+        safe_result = SimpleNamespace(reverted=False, revert_reason=None)
+        with self.assertRaisesRegex(RuntimeError, "negative control verdict was not 'resisted'"):
+            demo.validate_demo_outcomes(result, safe_result, SimpleNamespace(verified=False, verdict="error"))
+
+    def test_inconclusive_verdict_fails_acceptance_gate(self):
+        result = {"final_proof": {"proof": True}, "verifier_verdict": SimpleNamespace(verified=True)}
+        safe_result = SimpleNamespace(reverted=False, revert_reason=None)
+        with self.assertRaisesRegex(RuntimeError, "negative control verdict was not 'resisted'"):
+            demo.validate_demo_outcomes(result, safe_result, SimpleNamespace(verified=False, verdict="inconclusive"))
+
     @unittest.skipUnless(shutil.which("forge"), "forge not on PATH")
     def test_invalid_rendered_solidity_fails_real_compiler_gate(self):
         # The X02 mutation, for real: garbage in place of the emitted
         # contract must make the compiler gate fail (not just a mock).
         generated = Path(__file__).parent.parent / "contracts" / "test" / "generated"
+        # contracts/test/generated is gitignored: a clean checkout has no
+        # such directory, so create it before writing the fixture.
+        existed = generated.exists()
+        generated.mkdir(parents=True, exist_ok=True)
         garbage = generated / "ZZInvalidGate.t.sol"
         garbage.write_text("THIS IS NOT SOLIDITY\n", encoding="utf-8")
         try:
@@ -46,6 +62,11 @@ class TestDemoAcceptance(unittest.TestCase):
                 demo.validate_rendered_contract(garbage)
         finally:
             garbage.unlink(missing_ok=True)
+            if not existed:
+                try:
+                    generated.rmdir()
+                except OSError:
+                    pass
 
     def test_invalid_rendered_solidity_fails_compiler_gate(self):
         completed = subprocess.CompletedProcess([], 1, "", "Solidity syntax error")
