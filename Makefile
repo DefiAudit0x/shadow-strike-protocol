@@ -19,7 +19,7 @@ sandbox-selftest:
 	python shadow_strike/execution/sandbox.py
 
 lint:
-	ruff check shadow_strike/ --line-length 110
+	ruff check shadow_strike/ tests/ examples/
 
 clean:
 	find . -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

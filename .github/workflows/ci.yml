@@ -34,6 +34,17 @@ jobs:
       - name: Install forge-std
         run: forge install foundry-rs/forge-std@v1.9.7 --no-git
 
+      - name: Verify Solidity compiler prerequisites
+        run: |
+          set -euo pipefail
+          forge --version
+          test -d lib/forge-std || { echo "Missing lib/forge-std" >&2; exit 1; }
+          # Resolve/download the pinned compiler before the offline regressions.
+          forge build --use 0.8.19
+          solc="${FOUNDRY_SOLC:-$HOME/.svm/0.8.19/solc-0.8.19}"
+          test -x "$solc" || { echo "Missing executable solc 0.8.19: $solc" >&2; exit 1; }
+          "$solc" --version | grep -E 'Version: 0\.8\.19([+ -]|$)'
+
       - name: Run test suite
         run: python -m pytest -v
 
@@ -51,9 +62,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.17.6
       - name: Lint
-        run: ruff check shadow_strike/ tests/ --line-length 110
+        run: ruff check shadow_strike/ tests/ examples/
 
   foundry-tests:
     runs-on: ubuntu-latest
